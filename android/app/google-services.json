@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "634431870480",
+    "firebase_url": "https://rit-club-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "rit-club",
+    "storage_bucket": "rit-club.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:634431870480:android:95b20a63af11e8e51c1c95",
+        "android_client_info": {
+          "package_name": "com.example.rit_club"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCtL1qkwhGge0f-vPhSMGf9SWOXU1tfdKc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
