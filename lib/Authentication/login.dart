@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:rit_club/Authentication/signup.dart';
-import 'package:rit_club/pages/Home.dart';
+import 'package:rit_club/pages/Admin/admin_home.dart';
+import 'package:rit_club/pages/User/Home.dart';
 import 'package:rit_club/widgets/gradient_button.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -58,15 +59,42 @@ class _LoginState extends State<Login> {
     try {
       setState(() => _isLoading = true);
 
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
+      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: email,
         password: password,
       );
 
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => homePage()),
-      );
+      final uid = credential.user?.uid;
+      if (uid == null) {
+        throw Exception("User ID not found");
+      }
+
+      // Fetch role from Firestore
+      final userDoc =
+          await FirebaseFirestore.instance.collection('users').doc(uid).get();
+
+      if (!userDoc.exists || !userDoc.data()!.containsKey('role')) {
+        _showMessage("Error", "User role not defined. Contact admin.");
+        return;
+      }
+
+      final role = userDoc['role'];
+
+      if (role == 'USER') {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => HomePage()), // 👤 User's Home Page
+        );
+      } else if (role == 'ADMIN') {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AdminHome(),
+          ), // 🛠 Admin Page (create this)
+        );
+      } else {
+        _showMessage("Error", "Unknown role assigned to user.");
+      }
     } on FirebaseAuthException catch (e) {
       String message = "Login failed. Please try again.";
 

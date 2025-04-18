@@ -35,10 +35,19 @@ dependencies:
   firebase_auth: ^5.5.2
   cloud_firestore: ^5.6.6
   firebase_core: ^3.13.0
+  firebase_storage: ^12.4.5
   #google_fonts
   google_fonts: ^6.2.1
   #.env file Access
   flutter_dotenv: ^5.2.1
+
+  #image_picker
+  image_picker: ^1.1.2
+
+  #permission_handler
+
+  permission_handler: ^11.0.0
+
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -69,6 +78,8 @@ flutter:
   # To add assets to your application, add an assets section, like this:
   assets:
     - assets\App_Ic\Club_Ic.jpg
+    - assets\ClubLogo\ClubCircle.png
+    - assets\background.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

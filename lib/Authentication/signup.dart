@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:rit_club/pages/Home.dart';
+import 'package:rit_club/pages/User/Home.dart';
 import 'package:rit_club/widgets/gradient_button.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -144,12 +144,15 @@ class _SignUpState extends State<SignUp> {
         'department': _selectedDepartment,
         'section': section,
         'role': 'USER',
+        'OdCount': 0,
+        'FollowedClubs': [],
+        'blockUntil': null,
         'createdAt': FieldValue.serverTimestamp(),
       });
 
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const homePage()),
+        MaterialPageRoute(builder: (_) => const HomePage()),
       );
     } catch (e) {
       _showMessage("Error", "Failed to complete signup. Try again.");
