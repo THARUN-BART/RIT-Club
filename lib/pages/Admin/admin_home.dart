@@ -7,6 +7,9 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:rit_club/pages/About.dart';
+import 'package:rit_club/pages/Admin/events.dart';
+import 'package:rit_club/pages/Admin/history.dart';
+import 'package:rit_club/pages/Admin/participants.dart';
 
 class ClubCreationPage extends StatefulWidget {
   const ClubCreationPage({super.key});
@@ -394,7 +397,6 @@ class _ClubCreationPageState extends State<ClubCreationPage> {
   }
 }
 
-// Modified Admin Home Page with properly initialized pages list
 class AdminHome extends StatefulWidget {
   const AdminHome({super.key});
 
@@ -407,12 +409,11 @@ class _AdminHomeState extends State<AdminHome> {
   bool _isLoading = true;
   bool _hasClubs = false;
 
-  // Initialize pages list with all required pages
   final List<Widget> _pages = [
     const AdminDashboardPage(),
-    const EventManagementPage(),
-    const ParticipantsPage(),
-    const EventHistoryPage(),
+    const EventsPage(),
+    const participants(),
+    const history(),
   ];
 
   @override
@@ -421,21 +422,16 @@ class _AdminHomeState extends State<AdminHome> {
     _checkIfAdminHasClubs();
   }
 
-  // Check if the current admin has any clubs
   Future<void> _checkIfAdminHasClubs() async {
     try {
       final user = FirebaseAuth.instance.currentUser;
-      if (user == null) {
-        // Handle not logged in
-        return;
-      }
+      if (user == null) return;
 
-      // Query Firestore to check if the user is admin for any clubs
       final querySnapshot =
           await FirebaseFirestore.instance
               .collection('clubs')
               .where('adminIds', arrayContains: user.uid)
-              .limit(1) // We only need to know if there's at least one
+              .limit(1)
               .get();
 
       setState(() {
@@ -446,7 +442,6 @@ class _AdminHomeState extends State<AdminHome> {
       print("Error checking admin status: $e");
       setState(() {
         _isLoading = false;
-        // Default to no clubs on error
         _hasClubs = false;
       });
     }
@@ -461,7 +456,6 @@ class _AdminHomeState extends State<AdminHome> {
       );
     }
 
-    // If admin has no clubs, show only the club creation page
     if (!_hasClubs) {
       return Scaffold(
         appBar: AppBar(
@@ -471,7 +465,6 @@ class _AdminHomeState extends State<AdminHome> {
               icon: const Icon(Icons.logout),
               onPressed: () async {
                 await FirebaseAuth.instance.signOut();
-                // Navigate to login screen
                 if (context.mounted) {
                   Navigator.of(context).pushReplacementNamed('/login');
                 }
@@ -483,7 +476,6 @@ class _AdminHomeState extends State<AdminHome> {
       );
     }
 
-    // If admin has clubs, show the full dashboard with navigation
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -527,26 +519,10 @@ class _AdminHomeState extends State<AdminHome> {
         ],
         selectedItemColor: Colors.orangeAccent,
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          // Navigate to club creation page and handle refresh on return
-          final result = await Navigator.of(context).push(
-            MaterialPageRoute(builder: (context) => const ClubCreationPage()),
-          );
-
-          // If returned with true (club created), refresh clubs
-          if (result == true) {
-            _checkIfAdminHasClubs();
-          }
-        },
-        child: const Icon(Icons.add),
-        tooltip: 'Create New Club',
-      ),
     );
   }
 }
 
-// Add the required dashboard page
 class AdminDashboardPage extends StatefulWidget {
   const AdminDashboardPage({super.key});
 
@@ -557,6 +533,13 @@ class AdminDashboardPage extends StatefulWidget {
 class _AdminDashboardPageState extends State<AdminDashboardPage> {
   List<DocumentSnapshot> _clubs = [];
   bool _isLoading = true;
+  final TextEditingController _editNameController = TextEditingController();
+  final TextEditingController _editDescController = TextEditingController();
+  String _editCategory = 'Social Service';
+  File? _editImageFile;
+  bool _isEditing = false;
+  String? _editingClubId;
+  String? _currentImageUrl;
 
   @override
   void initState() {
@@ -587,12 +570,259 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+  Future<void> _startEditing(DocumentSnapshot club) async {
+    final data = club.data() as Map<String, dynamic>;
+    setState(() {
+      _isEditing = true;
+      _editingClubId = club.id;
+      _editNameController.text = data['name'] ?? '';
+      _editDescController.text = data['description'] ?? '';
+      _editCategory = data['category'] ?? 'Social Service';
+      _currentImageUrl = data['imageUrl'];
+    });
+  }
+
+  Future<void> _pickEditImage() async {
+    try {
+      final pickedFile = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+      );
+      if (pickedFile != null) {
+        setState(() {
+          _editImageFile = File(pickedFile.path);
+          _currentImageUrl = null;
+        });
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error picking image: ${e.toString()}")),
+      );
+    }
+  }
+
+  Future<void> _saveChanges() async {
+    if (_editNameController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Club name cannot be empty")),
+      );
+      return;
     }
 
+    try {
+      setState(() {
+        _isLoading = true;
+      });
+
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null || _editingClubId == null) return;
+
+      String? imageUrl = _currentImageUrl;
+
+      // Handling image upload
+      if (_editImageFile != null) {
+        final fileName = '${DateTime.now().millisecondsSinceEpoch}_${user.uid}';
+        final ref = FirebaseStorage.instance
+            .ref()
+            .child('club_images')
+            .child(fileName);
+
+        try {
+          await ref.putFile(_editImageFile!);
+          imageUrl = await ref.getDownloadURL();
+        } catch (uploadError) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("Error uploading image: ${uploadError.toString()}"),
+            ),
+          );
+          setState(() {
+            _isLoading = false;
+          });
+          return; // Stop further execution if upload fails
+        }
+      }
+
+      // Updating the Firestore document
+      await FirebaseFirestore.instance
+          .collection('clubs')
+          .doc(_editingClubId)
+          .update({
+            'name': _editNameController.text.trim(),
+            'description': _editDescController.text.trim(),
+            'category': _editCategory,
+            if (imageUrl != null) 'imageUrl': imageUrl,
+          });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Club updated successfully")),
+      );
+
+      await _loadAdminClubs();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error updating club: ${e.toString()}")),
+      );
+    } finally {
+      setState(() {
+        _isEditing = false;
+        _editingClubId = null;
+        _editImageFile = null;
+        _currentImageUrl = null;
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _cancelEditing() {
+    setState(() {
+      _isEditing = false;
+      _editingClubId = null;
+      _editImageFile = null;
+      _currentImageUrl = null;
+    });
+  }
+
+  Widget _buildEditForm() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        children: [
+          TextFormField(
+            controller: _editNameController,
+            decoration: const InputDecoration(
+              labelText: 'Club Name',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 16),
+          DropdownButtonFormField<String>(
+            value: _editCategory,
+            items:
+                [
+                  'Social Service',
+                  'Language',
+                  'Multifaceted Activities',
+                  'Technical Enthusiasts',
+                  'Talent Showcase',
+                ].map((String value) {
+                  return DropdownMenuItem<String>(
+                    value: value,
+                    child: Text(value),
+                  );
+                }).toList(),
+            onChanged: (String? newValue) {
+              if (newValue != null) {
+                setState(() {
+                  _editCategory = newValue;
+                });
+              }
+            },
+            decoration: const InputDecoration(
+              labelText: 'Category',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextFormField(
+            controller: _editDescController,
+            decoration: const InputDecoration(
+              labelText: 'Description',
+              border: OutlineInputBorder(),
+            ),
+            maxLines: 3,
+          ),
+          const SizedBox(height: 16),
+          Container(
+            height: 200,
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child:
+                _editImageFile != null
+                    ? Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.file(_editImageFile!, fit: BoxFit.cover),
+                        Positioned(
+                          right: 8,
+                          top: 8,
+                          child: IconButton(
+                            icon: const Icon(Icons.close, color: Colors.white),
+                            onPressed: () {
+                              setState(() {
+                                _editImageFile = null;
+                              });
+                            },
+                            style: IconButton.styleFrom(
+                              backgroundColor: Colors.black54,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                    : _currentImageUrl != null
+                    ? Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.network(_currentImageUrl!, fit: BoxFit.cover),
+                        Positioned(
+                          right: 8,
+                          top: 8,
+                          child: IconButton(
+                            icon: const Icon(Icons.close, color: Colors.white),
+                            onPressed: () {
+                              setState(() {
+                                _currentImageUrl = null;
+                              });
+                            },
+                            style: IconButton.styleFrom(
+                              backgroundColor: Colors.black54,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                    : Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.image, size: 50, color: Colors.grey),
+                          const SizedBox(height: 10),
+                          const Text("No image selected"),
+                          TextButton.icon(
+                            onPressed: _pickEditImage,
+                            icon: const Icon(Icons.add_photo_alternate),
+                            label: const Text("Select Image (Optional)"),
+                          ),
+                        ],
+                      ),
+                    ),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              ElevatedButton(
+                onPressed: _cancelEditing,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text("Cancel"),
+              ),
+              ElevatedButton(
+                onPressed: _saveChanges,
+                child: const Text("Save Changes"),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildClubList() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -618,14 +848,12 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                   margin: const EdgeInsets.only(bottom: 16),
                   elevation: 3,
                   child: InkWell(
-                    onTap: () {
-                      // Navigate to detailed club management
-                      // You can implement this later
-                    },
+                    onTap: () {},
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (data['imageUrl'] != null)
+                        if (data['imageUrl'] != null &&
+                            data['imageUrl'].isNotEmpty)
                           Container(
                             height: 150,
                             width: double.infinity,
@@ -655,7 +883,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                                 overflow: TextOverflow.ellipsis,
                               ),
                               const SizedBox(height: 8),
-                              // Display the category
                               if (data['category'] != null)
                                 Text(
                                   'Category: ${data['category'][0].toUpperCase() + data['category'].substring(1)}',
@@ -677,17 +904,8 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                                     children: [
                                       IconButton(
                                         icon: const Icon(Icons.edit),
-                                        onPressed: () {
-                                          // Edit club
-                                        },
+                                        onPressed: () => _startEditing(club),
                                         tooltip: 'Edit Club',
-                                      ),
-                                      IconButton(
-                                        icon: const Icon(Icons.event),
-                                        onPressed: () {
-                                          // Manage events
-                                        },
-                                        tooltip: 'Manage Events',
                                       ),
                                     ],
                                   ),
@@ -706,32 +924,17 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       ),
     );
   }
-}
-
-// Placeholder classes for the other pages that need to be implemented
-class EventManagementPage extends StatelessWidget {
-  const EventManagementPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const Center(child: Text("Event Management Page"));
-  }
-}
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-class ParticipantsPage extends StatelessWidget {
-  const ParticipantsPage({super.key});
+    if (_isEditing) {
+      return _buildEditForm();
+    }
 
-  @override
-  Widget build(BuildContext context) {
-    return const Center(child: Text("Participants Page"));
-  }
-}
-
-class EventHistoryPage extends StatelessWidget {
-  const EventHistoryPage({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(child: Text("Event History Page"));
+    return _buildClubList();
   }
 }

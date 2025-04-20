@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
-import 'package:rit_club/pages/About.dart';
 
 class adminHome extends StatefulWidget {
   const adminHome({super.key});
