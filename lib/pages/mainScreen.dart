@@ -18,7 +18,7 @@ class ClubCircleButton extends StatelessWidget {
           children: [
             // Centered image without cropping or stretching
             Image.asset(
-              'assets/ClubLogo/ClubCircle.png',
+              'assets/ClubLogo/Background.jpg',
               fit: BoxFit.contain, // Keeps full image visible
             ),
 

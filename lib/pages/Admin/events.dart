@@ -19,10 +19,7 @@ class _EventsPageState extends State<EventsPage> {
     User? user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       DocumentSnapshot snapshot =
-          await FirebaseFirestore.instance
-              .collection('clubs')
-              .doc(user.uid)
-              .get();
+          await FirebaseFirestore.instance.collection('clubs').doc().get();
       return snapshot['name'] as String?;
     }
     return null;

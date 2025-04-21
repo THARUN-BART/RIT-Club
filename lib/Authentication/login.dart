@@ -88,9 +88,7 @@ class _LoginState extends State<Login> {
       } else if (role == 'ADMIN') {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(
-            builder: (_) => AdminHome(),
-          ), // 🛠 Admin Page (create this)
+          MaterialPageRoute(builder: (_) => AdminHome()),
         );
       } else {
         _showMessage("Error", "Unknown role assigned to user.");

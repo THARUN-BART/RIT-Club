@@ -314,6 +314,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
 
     try {
+      // Get club name for the followed/unfollowed club
+      String clubName = '';
+      for (var club in _allClubs) {
+        if (club['id'] == clubId) {
+          clubName = club['name'];
+          break;
+        }
+      }
+
       // Reference to user document
       final userRef = FirebaseFirestore.instance
           .collection('users')
@@ -326,35 +335,80 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
       // Get user document
       DocumentSnapshot userDoc = await userRef.get();
+      // Get user email
+      String userEmail = user!.email ?? '';
 
       if (userDoc.exists) {
         // Start a batch operation to ensure atomicity
         final batch = FirebaseFirestore.instance.batch();
 
         Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
-        List<String> followedClubs = [];
+        List<String> followedClubIds = [];
+        Map<String, String> followedClubNames =
+            {}; // Store club names with their IDs
 
         // Safely extract followedClubs array
         if (userData.containsKey('followedClubs')) {
-          followedClubs = List<String>.from(userData['followedClubs']);
+          followedClubIds = List<String>.from(userData['followedClubs']);
         }
 
-        if (isFollowing) {
-          // UNFOLLOW: Remove the club ID from followedClubs list
-          followedClubs.removeWhere((id) => id == clubId);
-          // Update club's member count (decrease by 1)
-          batch.update(clubRef, {'memberCount': FieldValue.increment(-1)});
-        } else {
-          // FOLLOW: Add club ID to followedClubs list if not already present
-          if (!followedClubs.contains(clubId)) {
-            followedClubs.add(clubId);
-            // Update club's member count (increase by 1)
-            batch.update(clubRef, {'memberCount': FieldValue.increment(1)});
+        // Safely extract followedClubNames map
+        if (userData.containsKey('followedClubNames')) {
+          followedClubNames = Map<String, String>.from(
+            userData['followedClubNames'],
+          );
+        }
+
+        // Get club document to update its followers
+        DocumentSnapshot clubDoc = await clubRef.get();
+        Map<String, dynamic> clubData = {};
+        List<String> clubFollowers = [];
+
+        if (clubDoc.exists) {
+          clubData = clubDoc.data() as Map<String, dynamic>;
+          // Safely extract followers array
+          if (clubData.containsKey('followers')) {
+            clubFollowers = List<String>.from(clubData['followers']);
           }
         }
 
-        // Update user document with modified followedClubs list
-        batch.update(userRef, {'followedClubs': followedClubs});
+        if (isFollowing) {
+          // UNFOLLOW: Remove the club ID and name from user document
+          followedClubIds.removeWhere((id) => id == clubId);
+          followedClubNames.remove(clubId);
+
+          // Remove user email from club's followers list
+          clubFollowers.removeWhere((email) => email == userEmail);
+
+          // Update club's member count (decrease by 1)
+          batch.update(clubRef, {
+            'memberCount': FieldValue.increment(-1),
+            'followers': clubFollowers,
+          });
+        } else {
+          // FOLLOW: Add club ID and name to user document if not already present
+          if (!followedClubIds.contains(clubId)) {
+            followedClubIds.add(clubId);
+            followedClubNames[clubId] = clubName;
+
+            // Add user email to club's followers list if not already present
+            if (!clubFollowers.contains(userEmail)) {
+              clubFollowers.add(userEmail);
+            }
+
+            // Update club's member count (increase by 1)
+            batch.update(clubRef, {
+              'memberCount': FieldValue.increment(1),
+              'followers': clubFollowers,
+            });
+          }
+        }
+
+        // Update user document with modified lists
+        batch.update(userRef, {
+          'followedClubs': followedClubIds,
+          'followedClubNames': followedClubNames,
+        });
 
         // Commit the batch operation
         await batch.commit();
@@ -396,15 +450,37 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         });
       } else {
         // If user document doesn't exist, create one with the followed club
-        List<String> followedClubs = isFollowing ? [] : [clubId];
+        List<String> followedClubIds = isFollowing ? [] : [clubId];
+        Map<String, String> followedClubNames =
+            isFollowing ? {} : {clubId: clubName};
+
         await userRef.set({
-          'followedClubs': followedClubs,
+          'followedClubs': followedClubIds,
+          'followedClubNames': followedClubNames,
           'name': _userName,
         }, SetOptions(merge: true));
 
-        // Update club's member count only if following (not unfollowing)
+        // Update club's followers list and member count only if following (not unfollowing)
         if (!isFollowing) {
-          await clubRef.update({'memberCount': FieldValue.increment(1)});
+          DocumentSnapshot clubDoc = await clubRef.get();
+          List<String> clubFollowers = [];
+
+          if (clubDoc.exists && clubDoc.data() != null) {
+            Map<String, dynamic> clubData =
+                clubDoc.data() as Map<String, dynamic>;
+            if (clubData.containsKey('followers')) {
+              clubFollowers = List<String>.from(clubData['followers']);
+            }
+          }
+
+          if (!clubFollowers.contains(userEmail)) {
+            clubFollowers.add(userEmail);
+          }
+
+          await clubRef.update({
+            'memberCount': FieldValue.increment(1),
+            'followers': clubFollowers,
+          });
         }
       }
 
