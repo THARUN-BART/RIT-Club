@@ -150,10 +150,7 @@ class _SignUpState extends State<SignUp> {
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const HomePage()),
-      );
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (context)=>HomePage()));
     } catch (e) {
       _showMessage("Error", "Failed to complete signup. Try again.");
     } finally {

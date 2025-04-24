@@ -7,9 +7,11 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:rit_club/pages/About.dart';
-import 'package:rit_club/pages/Admin/events.dart';
+import 'package:rit_club/pages/Admin/admin_events.dart';
 import 'package:rit_club/pages/Admin/history.dart';
 import 'package:rit_club/pages/Admin/participants.dart';
+
+import '../../Authentication/login.dart';
 
 class ClubCreationPage extends StatefulWidget {
   const ClubCreationPage({super.key});
@@ -176,6 +178,7 @@ class _ClubCreationPageState extends State<ClubCreationPage> {
             'createdBy': user.email,
             'adminIds': [user.uid],
             'memberCount': 0,
+            'followers': [], // Initialize empty followers array
           });
 
       await clubRef.collection('events').add({
@@ -187,6 +190,9 @@ class _ClubCreationPageState extends State<ClubCreationPage> {
         'location': 'TBD',
         'participants': [],
       });
+
+      // Store the current club ID in shared preferences
+      await _saveCurrentClub(clubRef.id, clubName);
 
       _showSnackBar("Club created successfully!");
 
@@ -216,6 +222,14 @@ class _ClubCreationPageState extends State<ClubCreationPage> {
         });
       }
     }
+  }
+
+  // Function to save the current club to shared preferences
+  Future<void> _saveCurrentClub(String clubId, String clubName) async {
+    // You'll need to import the shared_preferences package
+    // For now, store the values in a static variable or use another state management solution
+    AdminHome.currentClubId = clubId;
+    AdminHome.currentClubName = clubName;
   }
 
   void _showSnackBar(String message) {
@@ -400,6 +414,10 @@ class _ClubCreationPageState extends State<ClubCreationPage> {
 class AdminHome extends StatefulWidget {
   const AdminHome({super.key});
 
+  // Add static variables to hold current club information
+  static String currentClubId = '';
+  static String currentClubName = '';
+
   @override
   State<AdminHome> createState() => _AdminHomeState();
 }
@@ -408,6 +426,7 @@ class _AdminHomeState extends State<AdminHome> {
   int _selectedIndex = 0;
   bool _isLoading = true;
   bool _hasClubs = false;
+  List<DocumentSnapshot> _userClubs = []; // Store all user clubs
 
   final List<Widget> _pages = [
     const AdminDashboardPage(),
@@ -431,11 +450,20 @@ class _AdminHomeState extends State<AdminHome> {
           await FirebaseFirestore.instance
               .collection('clubs')
               .where('adminIds', arrayContains: user.uid)
-              .limit(1)
               .get();
 
       setState(() {
+        _userClubs = querySnapshot.docs;
         _hasClubs = querySnapshot.docs.isNotEmpty;
+
+        // Set the current club if we have one and it's not already set
+        if (_hasClubs && AdminHome.currentClubId.isEmpty) {
+          final firstClub = querySnapshot.docs.first;
+          final data = firstClub.data();
+          AdminHome.currentClubId = firstClub.id;
+          AdminHome.currentClubName = data['name'] ?? 'Unknown Club';
+        }
+
         _isLoading = false;
       });
     } catch (e) {
@@ -444,6 +472,32 @@ class _AdminHomeState extends State<AdminHome> {
         _isLoading = false;
         _hasClubs = false;
       });
+    }
+  }
+
+  void _switchClub(String clubId, String clubName) {
+    setState(() {
+      AdminHome.currentClubId = clubId;
+      AdminHome.currentClubName = clubName;
+    });
+    // Refresh the current page to reflect the new club
+    _pages[_selectedIndex] = _rebuildCurrentPage(_selectedIndex);
+    setState(() {});
+  }
+
+  // Helper method to rebuild the current page
+  Widget _rebuildCurrentPage(int index) {
+    switch (index) {
+      case 0:
+        return const AdminDashboardPage();
+      case 1:
+        return const EventsPage();
+      case 2:
+        return const participants();
+      case 3:
+        return const history();
+      default:
+        return const AdminDashboardPage();
     }
   }
 
@@ -466,7 +520,11 @@ class _AdminHomeState extends State<AdminHome> {
               onPressed: () async {
                 await FirebaseAuth.instance.signOut();
                 if (context.mounted) {
-                  Navigator.of(context).pushReplacementNamed('/login');
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (context) => const Login()),
+                    (route) => false,
+                  );
                 }
               },
             ),
@@ -478,12 +536,41 @@ class _AdminHomeState extends State<AdminHome> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          "Club Admin Dashboard",
-          style: GoogleFonts.aclonica(fontSize: 25, color: Colors.orangeAccent),
+        title: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "Club Admin Dashboard",
+              style: GoogleFonts.aclonica(
+                fontSize: 25,
+                color: Colors.orangeAccent,
+              ),
+            ),
+          ],
         ),
         centerTitle: true,
         actions: [
+          // Add club dropdown if user has multiple clubs
+          if (_userClubs.length > 1)
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.swap_horiz),
+              tooltip: 'Switch Club',
+              onSelected: (String clubId) {
+                final club = _userClubs.firstWhere((c) => c.id == clubId);
+                final data = club.data() as Map<String, dynamic>;
+                _switchClub(clubId, data['name'] ?? 'Unknown Club');
+              },
+              itemBuilder: (BuildContext context) {
+                return _userClubs.map((club) {
+                  final data = club.data() as Map<String, dynamic>;
+                  final name = data['name'] ?? 'Unknown Club';
+                  return PopupMenuItem<String>(
+                    value: club.id,
+                    child: Text(name),
+                  );
+                }).toList();
+              },
+            ),
           IconButton(
             onPressed: () {
               Navigator.push(
@@ -503,6 +590,8 @@ class _AdminHomeState extends State<AdminHome> {
         onTap: (index) {
           setState(() {
             _selectedIndex = index;
+            // Rebuild the page when switching tabs
+            _pages[index] = _rebuildCurrentPage(index);
           });
         },
         items: const [
@@ -540,6 +629,8 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   bool _isEditing = false;
   String? _editingClubId;
   String? _currentImageUrl;
+  List<String> _followers = [];
+  bool _isLoadingFollowers = false;
 
   @override
   void initState() {
@@ -552,6 +643,27 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
 
+      // If we have a current club ID, load just that club
+      if (AdminHome.currentClubId.isNotEmpty) {
+        final docSnapshot =
+            await FirebaseFirestore.instance
+                .collection('clubs')
+                .doc(AdminHome.currentClubId)
+                .get();
+
+        if (docSnapshot.exists) {
+          setState(() {
+            _clubs = [docSnapshot];
+            _isLoading = false;
+          });
+
+          // Load followers for the current club
+          _loadClubFollowers();
+          return;
+        }
+      }
+
+      // Otherwise, load all clubs
       final querySnapshot =
           await FirebaseFirestore.instance
               .collection('clubs')
@@ -561,12 +673,113 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       setState(() {
         _clubs = querySnapshot.docs;
         _isLoading = false;
+
+        // If clubs were found and current club ID isn't set
+        if (_clubs.isNotEmpty && AdminHome.currentClubId.isEmpty) {
+          AdminHome.currentClubId = _clubs[0].id;
+          final data = _clubs[0].data() as Map<String, dynamic>;
+          AdminHome.currentClubName = data['name'] ?? 'Unknown Club';
+        }
       });
+
+      // Load followers for the current club
+      _loadClubFollowers();
     } catch (e) {
       print("Error loading clubs: $e");
       setState(() {
         _isLoading = false;
       });
+    }
+  }
+
+  Future<void> _loadClubFollowers() async {
+    if (AdminHome.currentClubId.isEmpty) return;
+
+    setState(() {
+      _isLoadingFollowers = true;
+    });
+
+    try {
+      DocumentSnapshot clubDoc =
+          await FirebaseFirestore.instance
+              .collection('clubs')
+              .doc(AdminHome.currentClubId)
+              .get();
+
+      if (clubDoc.exists && clubDoc.data() != null) {
+        final data = clubDoc.data() as Map<String, dynamic>;
+        List<dynamic>? followerEmails = data['followers'];
+
+        setState(() {
+          _followers = followerEmails?.cast<String>() ?? [];
+          _isLoadingFollowers = false;
+        });
+      } else {
+        setState(() {
+          _followers = [];
+          _isLoadingFollowers = false;
+        });
+      }
+    } catch (e) {
+      print("Error fetching followers: $e");
+      setState(() {
+        _isLoadingFollowers = false;
+        _followers = [];
+      });
+    }
+  }
+
+  void _showUserDetailsDialog(DocumentSnapshot userDoc) {
+    final userData = userDoc.data() as Map<String, dynamic>;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text("User Details"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text("Name: ${userData['name'] ?? 'UserWithoutName'}"),
+              Text("Email: ${userData['email'] ?? 'UserNotFound'}"),
+              Text("Department: ${userData['department'] ?? 'dept'}"),
+              Text("Register Number: ${userData['regNo'] ?? '123456789012'}"),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Close"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _fetchUserDetails(String email) async {
+    try {
+      QuerySnapshot querySnapshot =
+          await FirebaseFirestore.instance
+              .collection('users')
+              .where('email', isEqualTo: email)
+              .get();
+
+      if (querySnapshot.docs.isNotEmpty) {
+        DocumentSnapshot userDoc = querySnapshot.docs.first;
+
+        // Pass the actual DocumentSnapshot directly
+        _showUserDetailsDialog(userDoc);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("No user found with this email")),
+        );
+      }
+    } catch (e) {
+      print("Error fetching user details: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error fetching user details: ${e.toString()}")),
+      );
     }
   }
 
@@ -652,6 +865,11 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
             'category': _editCategory,
             if (imageUrl != null) 'imageUrl': imageUrl,
           });
+
+      // Update current club name if this is the active club
+      if (_editingClubId == AdminHome.currentClubId) {
+        AdminHome.currentClubName = _editNameController.text.trim();
+      }
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Club updated successfully")),
@@ -793,7 +1011,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                           TextButton.icon(
                             onPressed: _pickEditImage,
                             icon: const Icon(Icons.add_photo_alternate),
-                            label: const Text("Select Image (Optional)"),
+                            label: const Text("Select Image"),
                           ),
                         ],
                       ),
@@ -803,123 +1021,26 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              ElevatedButton(
+              OutlinedButton.icon(
                 onPressed: _cancelEditing,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.red,
                   foregroundColor: Colors.white,
                 ),
-                child: const Text("Cancel"),
+                icon: const Icon(Icons.cancel),
+                label: const Text("Cancel"),
               ),
-              ElevatedButton(
+              ElevatedButton.icon(
                 onPressed: _saveChanges,
-                child: const Text("Save Changes"),
+                icon: const Icon(Icons.save),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  foregroundColor: Colors.white,
+                ),
+                label: const Text("Save Changes"),
               ),
             ],
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildClubList() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            "Your Clubs",
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 16),
-          if (_clubs.isEmpty)
-            const Center(child: Text("You don't have any clubs yet."))
-          else
-            ListView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: _clubs.length,
-              itemBuilder: (context, index) {
-                final club = _clubs[index];
-                final data = club.data() as Map<String, dynamic>;
-
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 16),
-                  elevation: 3,
-                  child: InkWell(
-                    onTap: () {},
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (data['imageUrl'] != null &&
-                            data['imageUrl'].isNotEmpty)
-                          Container(
-                            height: 150,
-                            width: double.infinity,
-                            decoration: BoxDecoration(
-                              image: DecorationImage(
-                                image: NetworkImage(data['imageUrl']),
-                                fit: BoxFit.cover,
-                              ),
-                            ),
-                          ),
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                data['name'] ?? 'Unnamed Club',
-                                style: const TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                data['description'] ?? 'No description',
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const SizedBox(height: 8),
-                              if (data['category'] != null)
-                                Text(
-                                  'Category: ${data['category'][0].toUpperCase() + data['category'].substring(1)}',
-                                  style: const TextStyle(
-                                    color: Colors.grey,
-                                    fontStyle: FontStyle.italic,
-                                  ),
-                                ),
-                              const SizedBox(height: 12),
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    'Members: ${data['memberCount'] ?? 0}',
-                                    style: const TextStyle(color: Colors.grey),
-                                  ),
-                                  Row(
-                                    children: [
-                                      IconButton(
-                                        icon: const Icon(Icons.edit),
-                                        onPressed: () => _startEditing(club),
-                                        tooltip: 'Edit Club',
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
         ],
       ),
     );
@@ -935,6 +1056,190 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       return _buildEditForm();
     }
 
-    return _buildClubList();
+    if (_clubs.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text(
+              "You haven't created any clubs yet",
+              style: TextStyle(fontSize: 18),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const ClubCreationPage(),
+                  ),
+                ).then((value) {
+                  if (value == true) {
+                    _loadAdminClubs();
+                  }
+                });
+              },
+              icon: const Icon(Icons.add),
+              label: const Text("Create New Club"),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Get the current club
+    final currentClub = _clubs.firstWhere(
+      (club) => club.id == AdminHome.currentClubId,
+      orElse: () => _clubs[0],
+    );
+
+    final clubData = currentClub.data() as Map<String, dynamic>;
+    final clubName = clubData['name'] ?? 'Unknown Club';
+    final clubDescription = clubData['description'] ?? 'No description';
+    final clubCategory = clubData['category'] ?? 'Uncategorized';
+    final clubImageUrl = clubData['imageUrl'];
+    final memberCount = clubData['memberCount'] ?? 0;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Card(
+            elevation: 4,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              children: [
+                if (clubImageUrl != null && clubImageUrl.isNotEmpty)
+                  ClipRRect(
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(12),
+                    ),
+                    child: Image.network(
+                      clubImageUrl,
+                      height: 200,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                      errorBuilder:
+                          (context, error, stackTrace) => Container(
+                            height: 200,
+                            color: Colors.grey[300],
+                            child: const Center(
+                              child: Icon(
+                                Icons.error,
+                                size: 50,
+                                color: Colors.red,
+                              ),
+                            ),
+                          ),
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              clubName,
+                              style: const TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.edit),
+                            onPressed: () => _startEditing(currentClub),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Chip(label: Text(clubCategory)),
+                          const SizedBox(width: 8),
+                          Chip(label: Text("Members: $memberCount")),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        "Description:",
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(clubDescription),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          Card(
+            elevation: 4,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "Club Followers",
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 16),
+                  if (_isLoadingFollowers)
+                    const Center(child: CircularProgressIndicator())
+                  else if (_followers.isEmpty)
+                    const Center(
+                      child: Text(
+                        "No followers yet",
+                        style: TextStyle(fontSize: 16),
+                      ),
+                    )
+                  else
+                    ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: _followers.length,
+                      itemBuilder: (context, index) {
+                        final followerEmail = _followers[index];
+                        return ListTile(
+                          leading: const CircleAvatar(
+                            child: Icon(Icons.person),
+                          ),
+                          title: Text(followerEmail),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.info_outline),
+                            onPressed: () => _fetchUserDetails(followerEmail),
+                          ),
+                        );
+                      },
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _editNameController.dispose();
+    _editDescController.dispose();
+    super.dispose();
   }
 }

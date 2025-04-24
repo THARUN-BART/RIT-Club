@@ -58,8 +58,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       setState(() {
         _pages.addAll([
           _buildHomeContent(),
-          const statusPage(),
           const EventPage(),
+          const statusPage(),
         ]);
       });
     });
@@ -244,257 +244,156 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       return;
     }
 
-    // Optimistic UI update before Firestore operation to make it feel instant
+    // Get club name before making any changes
+    String clubName = '';
+    for (var club in _allClubs) {
+      if (club['id'] == clubId) {
+        clubName = club['name'];
+        break;
+      }
+    }
+
+    // Show immediate feedback
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 2),
+        content: Text(
+          isFollowing ? 'Unfollowing $clubName' : 'Following $clubName',
+        ),
+        backgroundColor: isFollowing ? Colors.red : Colors.green,
+      ),
+    );
+
+    // Optimistic UI update
     setState(() {
       if (isFollowing) {
-        // Optimistically remove from followed clubs
         _followedClubs.removeWhere((club) => club['id'] == clubId);
-
-        // Also update member count in all clubs lists
+        // Update member count in all lists
         for (var club in _allClubs) {
           if (club['id'] == clubId) {
             club['memberCount'] = (club['memberCount'] ?? 1) - 1;
             break;
           }
         }
-
-        for (var category in _clubsByCategory.keys) {
-          for (var club in _clubsByCategory[category]!) {
-            if (club['id'] == clubId) {
-              club['memberCount'] = (club['memberCount'] ?? 1) - 1;
-              break;
-            }
-          }
-        }
       } else {
-        // Optimistically add to followed clubs
         Map<String, dynamic>? clubToFollow = _allClubs.firstWhere(
           (club) => club['id'] == clubId,
           orElse: () => <String, dynamic>{},
         );
 
-        if (clubToFollow.isNotEmpty &&
-            !_followedClubs.any((club) => club['id'] == clubId)) {
-          // Update member count optimistically
+        if (clubToFollow.isNotEmpty) {
           clubToFollow = Map<String, dynamic>.from(clubToFollow);
           clubToFollow['memberCount'] = (clubToFollow['memberCount'] ?? 0) + 1;
           _followedClubs.add(clubToFollow);
 
-          // Also update in all clubs lists
+          // Update in all clubs lists
           for (var club in _allClubs) {
             if (club['id'] == clubId) {
               club['memberCount'] = (club['memberCount'] ?? 0) + 1;
               break;
             }
           }
-
-          for (var category in _clubsByCategory.keys) {
-            for (var club in _clubsByCategory[category]!) {
-              if (club['id'] == clubId) {
-                club['memberCount'] = (club['memberCount'] ?? 0) + 1;
-                break;
-              }
-            }
-          }
         }
       }
-
-      // Re-organize followed clubs by category
       _organizeFollowedClubsByCategory();
     });
 
-    // Show immediate feedback
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        duration: const Duration(seconds: 1),
-        content: Text(
-          isFollowing ? 'Club unfollowed' : 'Club followed successfully',
-        ),
-      ),
-    );
-
     try {
-      // Get club name for the followed/unfollowed club
-      String clubName = '';
-      for (var club in _allClubs) {
-        if (club['id'] == clubId) {
-          clubName = club['name'];
-          break;
-        }
-      }
-
-      // Reference to user document
       final userRef = FirebaseFirestore.instance
           .collection('users')
           .doc(user!.uid);
-
-      // Reference to club document
       final clubRef = FirebaseFirestore.instance
           .collection('clubs')
           .doc(clubId);
+      final userEmail = user!.email ?? '';
 
-      // Get user document
+      // Get current user data
       DocumentSnapshot userDoc = await userRef.get();
-      // Get user email
-      String userEmail = user!.email ?? '';
+      Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
 
-      if (userDoc.exists) {
-        // Start a batch operation to ensure atomicity
-        final batch = FirebaseFirestore.instance.batch();
+      // Initialize or get followed clubs data
+      List<String> followedClubIds = [];
+      Map<String, String> followedClubNames = {};
 
-        Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
-        List<String> followedClubIds = [];
-        Map<String, String> followedClubNames =
-            {}; // Store club names with their IDs
+      if (userData.containsKey('followedClubs')) {
+        followedClubIds = List<String>.from(userData['followedClubs']);
+      }
+      if (userData.containsKey('followedClubNames')) {
+        followedClubNames = Map<String, String>.from(
+          userData['followedClubNames'],
+        );
+      }
 
-        // Safely extract followedClubs array
-        if (userData.containsKey('followedClubs')) {
-          followedClubIds = List<String>.from(userData['followedClubs']);
-        }
+      // Get current club data
+      DocumentSnapshot clubDoc = await clubRef.get();
+      Map<String, dynamic> clubData = clubDoc.data() as Map<String, dynamic>;
+      List<String> clubFollowers = [];
 
-        // Safely extract followedClubNames map
-        if (userData.containsKey('followedClubNames')) {
-          followedClubNames = Map<String, String>.from(
-            userData['followedClubNames'],
-          );
-        }
+      if (clubData.containsKey('followers')) {
+        clubFollowers = List<String>.from(clubData['followers']);
+      }
 
-        // Get club document to update its followers
-        DocumentSnapshot clubDoc = await clubRef.get();
-        Map<String, dynamic> clubData = {};
-        List<String> clubFollowers = [];
+      // Batch update to ensure atomic operation
+      final batch = FirebaseFirestore.instance.batch();
 
-        if (clubDoc.exists) {
-          clubData = clubDoc.data() as Map<String, dynamic>;
-          // Safely extract followers array
-          if (clubData.containsKey('followers')) {
-            clubFollowers = List<String>.from(clubData['followers']);
-          }
-        }
+      if (isFollowing) {
+        // UNFOLLOW: Remove the club ID and name from user document
+        followedClubIds.remove(clubId);
+        followedClubNames.remove(clubId);
 
-        if (isFollowing) {
-          // UNFOLLOW: Remove the club ID and name from user document
-          followedClubIds.removeWhere((id) => id == clubId);
-          followedClubNames.remove(clubId);
-
-          // Remove user email from club's followers list
-          clubFollowers.removeWhere((email) => email == userEmail);
-
-          // Update club's member count (decrease by 1)
-          batch.update(clubRef, {
-            'memberCount': FieldValue.increment(-1),
-            'followers': clubFollowers,
-          });
-        } else {
-          // FOLLOW: Add club ID and name to user document if not already present
-          if (!followedClubIds.contains(clubId)) {
-            followedClubIds.add(clubId);
-            followedClubNames[clubId] = clubName;
-
-            // Add user email to club's followers list if not already present
-            if (!clubFollowers.contains(userEmail)) {
-              clubFollowers.add(userEmail);
-            }
-
-            // Update club's member count (increase by 1)
-            batch.update(clubRef, {
-              'memberCount': FieldValue.increment(1),
-              'followers': clubFollowers,
-            });
-          }
-        }
-
-        // Update user document with modified lists
-        batch.update(userRef, {
-          'followedClubs': followedClubIds,
-          'followedClubNames': followedClubNames,
-        });
-
-        // Commit the batch operation
-        await batch.commit();
-
-        // Get the updated club document to ensure accurate member count
-        DocumentSnapshot updatedClubDoc = await clubRef.get();
-        int accurateMemberCount = 0;
-        if (updatedClubDoc.exists && updatedClubDoc.data() != null) {
-          accurateMemberCount =
-              (updatedClubDoc.data() as Map<String, dynamic>)['memberCount'] ??
-              0;
-        }
-
-        // Update UI with accurate count from Firebase
-        setState(() {
-          // Update memberCount in all lists with the EXACT count from Firebase
-          for (var club in _allClubs) {
-            if (club['id'] == clubId) {
-              club['memberCount'] = accurateMemberCount;
-              break;
-            }
-          }
-
-          for (var category in _clubsByCategory.keys) {
-            for (var club in _clubsByCategory[category]!) {
-              if (club['id'] == clubId) {
-                club['memberCount'] = accurateMemberCount;
-                break;
-              }
-            }
-          }
-
-          for (var club in _followedClubs) {
-            if (club['id'] == clubId) {
-              club['memberCount'] = accurateMemberCount;
-              break;
-            }
-          }
-        });
+        // Remove user email from club's followers list
+        clubFollowers.remove(userEmail);
       } else {
-        // If user document doesn't exist, create one with the followed club
-        List<String> followedClubIds = isFollowing ? [] : [clubId];
-        Map<String, String> followedClubNames =
-            isFollowing ? {} : {clubId: clubName};
+        // FOLLOW: Add club ID and name to user document if not already present
+        if (!followedClubIds.contains(clubId)) {
+          followedClubIds.add(clubId);
+          followedClubNames[clubId] = clubName;
+        }
 
-        await userRef.set({
-          'followedClubs': followedClubIds,
-          'followedClubNames': followedClubNames,
-          'name': _userName,
-        }, SetOptions(merge: true));
-
-        // Update club's followers list and member count only if following (not unfollowing)
-        if (!isFollowing) {
-          DocumentSnapshot clubDoc = await clubRef.get();
-          List<String> clubFollowers = [];
-
-          if (clubDoc.exists && clubDoc.data() != null) {
-            Map<String, dynamic> clubData =
-                clubDoc.data() as Map<String, dynamic>;
-            if (clubData.containsKey('followers')) {
-              clubFollowers = List<String>.from(clubData['followers']);
-            }
-          }
-
-          if (!clubFollowers.contains(userEmail)) {
-            clubFollowers.add(userEmail);
-          }
-
-          await clubRef.update({
-            'memberCount': FieldValue.increment(1),
-            'followers': clubFollowers,
-          });
+        // Add user email to club's followers list if not already present
+        if (!clubFollowers.contains(userEmail)) {
+          clubFollowers.add(userEmail);
         }
       }
 
-      // Refresh data to ensure we have the most up-to-date state
+      // Update user document
+      batch.update(userRef, {
+        'followedClubs': followedClubIds,
+        'followedClubNames': followedClubNames,
+      });
+
+      // Update club document
+      batch.update(clubRef, {
+        'memberCount': FieldValue.increment(isFollowing ? -1 : 1),
+        'followers': clubFollowers,
+      });
+
+      await batch.commit();
+
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 2),
+          content: Text(
+            isFollowing
+                ? 'Successfully unfollowed $clubName'
+                : 'Successfully followed $clubName',
+          ),
+          backgroundColor: isFollowing ? Colors.red : Colors.green,
+        ),
+      );
+
+      // Refresh data to ensure consistency
       await _fetchClubs();
     } catch (e) {
       print('Error toggling club follow: $e');
-
-      // Revert the optimistic update in case of error
+      // Revert optimistic update
       await _fetchClubs();
-
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Failed to update club subscription: ${e.toString()}'),
+          duration: const Duration(seconds: 2),
+          content: Text('Failed to update: ${e.toString()}'),
+          backgroundColor: Colors.red,
         ),
       );
     }
@@ -815,12 +714,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         items: const <BottomNavigationBarItem>[
           BottomNavigationBarItem(icon: Icon(Icons.group), label: 'Clubs'),
           BottomNavigationBarItem(
-            icon: Icon(Icons.access_time),
-            label: 'My Status',
-          ),
-          BottomNavigationBarItem(
             icon: Icon(Icons.event_note_outlined),
             label: 'My Events',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.access_time),
+            label: 'My Status',
           ),
         ],
         currentIndex: _selectedIndex,

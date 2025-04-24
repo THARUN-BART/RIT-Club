@@ -17,6 +17,7 @@ class _statusPageState extends State<statusPage> {
           "My Status",
           style: GoogleFonts.aclonica(fontSize: 25, color: Colors.orangeAccent),
         ),
+        centerTitle: true,
       ),
     );
   }
