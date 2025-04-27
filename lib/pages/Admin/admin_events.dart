@@ -50,7 +50,6 @@ class _EventsPageState extends State<EventsPage>
     Function(DateTime) onDatePicked, {
     DateTime? minDate,
   }) async {
-    // Use today as the minimum selectable date, or the provided minDate if specified
     final DateTime minimumDate = minDate ?? DateTime.now();
 
     final DateTime? picked = await showDatePicker(
@@ -107,7 +106,6 @@ class _EventsPageState extends State<EventsPage>
     final participantLimitController = TextEditingController();
     final locationController = TextEditingController();
 
-    // Reset date/time variables when opening dialog
     registrationDate = null;
     registrationTime = null;
     eventDate = null;
@@ -253,7 +251,6 @@ class _EventsPageState extends State<EventsPage>
                           return;
                         }
 
-                        // Combine date and time for registration
                         final registrationDateTime = DateTime(
                           registrationDate!.year,
                           registrationDate!.month,
@@ -262,7 +259,6 @@ class _EventsPageState extends State<EventsPage>
                           registrationTime!.minute,
                         );
 
-                        // Combine date and time for event
                         final eventDateTime = DateTime(
                           eventDate!.year,
                           eventDate!.month,
@@ -271,7 +267,6 @@ class _EventsPageState extends State<EventsPage>
                           eventTime!.minute,
                         );
 
-                        // Check if event date is after registration date
                         if (eventDateTime.isBefore(registrationDateTime)) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
@@ -285,7 +280,6 @@ class _EventsPageState extends State<EventsPage>
                         }
 
                         try {
-                          // Store in separate events collection
                           await FirebaseFirestore.instance
                               .collection('events')
                               .add({
@@ -486,13 +480,8 @@ class _EventsPageState extends State<EventsPage>
       body: TabBarView(
         controller: _tabController,
         children: [
-          // Active Events Tab
           _buildEventsList('active'),
-
-          // Cancelled Events Tab
           _buildEventsList('cancelled'),
-
-          // Past Events Tab
           _buildEventsList('past'),
         ],
       ),
@@ -502,26 +491,30 @@ class _EventsPageState extends State<EventsPage>
   Widget _buildEventsList(String status) {
     Query eventsQuery;
     DateTime now = DateTime.now();
+    String? currentUserId = FirebaseAuth.instance.currentUser?.uid;
 
-    // Fixed query logic for different event types
-    if (status == 'active') {
-      // For active events, we want non-cancelled events with future dates
-      eventsQuery = FirebaseFirestore.instance
-          .collection('events')
-          .where('status', isEqualTo: 'active')
-          .orderBy('eventDateTime');
-    } else if (status == 'cancelled') {
-      // For cancelled events, simply show all with cancelled status
-      eventsQuery = FirebaseFirestore.instance
-          .collection('events')
-          .where('status', isEqualTo: 'cancelled')
-          .orderBy('eventDateTime', descending: true);
+    if (currentUserId != null) {
+      if (status == 'cancelled') {
+        eventsQuery = FirebaseFirestore.instance
+            .collection('events')
+            .where('clubId', isEqualTo: currentUserId)
+            .where('status', isEqualTo: 'cancelled')
+            .orderBy('eventDateTime', descending: true);
+      } else if (status == 'past') {
+        eventsQuery = FirebaseFirestore.instance
+            .collection('events')
+            .where('clubId', isEqualTo: currentUserId)
+            .where('status', isEqualTo: 'active')
+            .orderBy('eventDateTime', descending: true);
+      } else {
+        eventsQuery = FirebaseFirestore.instance
+            .collection('events')
+            .where('clubId', isEqualTo: currentUserId)
+            .where('status', isEqualTo: 'active')
+            .orderBy('eventDateTime');
+      }
     } else {
-      // For past events, show active status events with past dates
-      eventsQuery = FirebaseFirestore.instance
-          .collection('events')
-          .where('status', isEqualTo: 'active')
-          .orderBy('eventDateTime', descending: true);
+      eventsQuery = FirebaseFirestore.instance.collection('events').limit(0);
     }
 
     return StreamBuilder<QuerySnapshot>(
@@ -538,12 +531,9 @@ class _EventsPageState extends State<EventsPage>
         }
 
         final events = snapshot.data?.docs ?? [];
-
-        // Additional client-side filtering for date-based lists
-        List<QueryDocumentSnapshot> filteredEvents;
+        List<QueryDocumentSnapshot> filteredEvents = [];
 
         if (status == 'active') {
-          // Keep only events with future dates
           filteredEvents =
               events.where((doc) {
                 final event = doc.data() as Map<String, dynamic>;
@@ -556,7 +546,6 @@ class _EventsPageState extends State<EventsPage>
                 }
               }).toList();
         } else if (status == 'past') {
-          // Keep only events with past dates
           filteredEvents =
               events.where((doc) {
                 final event = doc.data() as Map<String, dynamic>;
@@ -569,7 +558,6 @@ class _EventsPageState extends State<EventsPage>
                 }
               }).toList();
         } else {
-          // For cancelled events, use all returned events
           filteredEvents = events;
         }
 
@@ -633,6 +621,7 @@ class _EventsPageState extends State<EventsPage>
               isUpcoming: !isPast,
               isAdmin: true,
               isCancelled: isCancelled,
+              isPastEvent: isPast, // Added this new parameter
             );
           },
         );
@@ -653,6 +642,7 @@ class EventCard extends StatelessWidget {
   final bool isUpcoming;
   final bool isAdmin;
   final bool isCancelled;
+  final bool isPastEvent; // Added this new parameter
 
   const EventCard({
     required this.eventId,
@@ -666,6 +656,7 @@ class EventCard extends StatelessWidget {
     required this.isUpcoming,
     this.isAdmin = false,
     this.isCancelled = false,
+    required this.isPastEvent, // Added this new parameter
     super.key,
   });
 
@@ -676,7 +667,6 @@ class EventCard extends StatelessWidget {
 
     final formattedDate =
         eventDate != null ? dateFormat.format(eventDate!) : 'Date TBD';
-
     final formattedTime =
         eventDate != null ? timeFormat.format(eventDate!) : 'Time TBD';
 
@@ -706,7 +696,6 @@ class EventCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header with club name and status
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
@@ -757,8 +746,6 @@ class EventCard extends StatelessWidget {
                 ],
               ),
             ),
-
-            // Event title and description
             Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -781,8 +768,6 @@ class EventCard extends StatelessWidget {
                 ],
               ),
             ),
-
-            // Event details
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
@@ -802,9 +787,7 @@ class EventCard extends StatelessWidget {
                 ],
               ),
             ),
-
             const SizedBox(height: 8),
-
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
@@ -833,8 +816,6 @@ class EventCard extends StatelessWidget {
                 ],
               ),
             ),
-
-            // Participants info
             Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -862,8 +843,8 @@ class EventCard extends StatelessWidget {
                       ],
                     ),
                   ),
-                  // Allow editing for both active and cancelled events
-                  if (isAdmin && isUpcoming && !isCancelled)
+                  // Only show edit button for upcoming, non-cancelled events that aren't past
+                  if (isAdmin && isUpcoming && !isCancelled && !isPastEvent)
                     TextButton.icon(
                       onPressed: () {
                         _showEditEventDialog(context);
@@ -905,7 +886,6 @@ class EventCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Handle
                   Center(
                     child: Container(
                       margin: const EdgeInsets.only(top: 8, bottom: 12),
@@ -917,8 +897,6 @@ class EventCard extends StatelessWidget {
                       ),
                     ),
                   ),
-
-                  // Event title and organization
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24),
                     child: Column(
@@ -958,16 +936,12 @@ class EventCard extends StatelessWidget {
                       ],
                     ),
                   ),
-
                   const Divider(height: 32),
-
-                  // Event details (time, location, etc.)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Date and time
                         Row(
                           children: [
                             Container(
@@ -982,33 +956,34 @@ class EventCard extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(width: 16),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  eventDate != null
-                                      ? dateFormat.format(eventDate!)
-                                      : 'Date TBD',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w500,
-                                    fontSize: 16,
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    eventDate != null
+                                        ? dateFormat.format(eventDate!)
+                                        : 'Date TBD',
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
                                   ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  eventDate != null
-                                      ? timeFormat.format(eventDate!)
-                                      : 'Time TBD',
-                                  style: TextStyle(color: Colors.grey.shade700),
-                                ),
-                              ],
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    eventDate != null
+                                        ? timeFormat.format(eventDate!)
+                                        : 'Time TBD',
+                                    style: TextStyle(
+                                      color: Colors.grey.shade700,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
                         ),
-
                         const SizedBox(height: 20),
-
-                        // Location
                         Row(
                           children: [
                             Container(
@@ -1024,32 +999,17 @@ class EventCard extends StatelessWidget {
                             ),
                             const SizedBox(width: 16),
                             Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    'Location',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w500,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    location,
-                                    style: TextStyle(
-                                      color: Colors.grey.shade700,
-                                    ),
-                                  ),
-                                ],
+                              child: Text(
+                                location,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
                           ],
                         ),
-
                         const SizedBox(height: 20),
-
-                        // Participants
                         Row(
                           children: [
                             Container(
@@ -1064,41 +1024,52 @@ class EventCard extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(width: 16),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Participants',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w500,
-                                    fontSize: 16,
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    participantLimit > 0
+                                        ? '$currentParticipants/$participantLimit participants'
+                                        : '$currentParticipants participants',
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
                                   ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  participantLimit > 0
-                                      ? '$currentParticipants/$participantLimit enrolled'
-                                      : '$currentParticipants enrolled',
-                                  style: TextStyle(color: Colors.grey.shade700),
-                                ),
-                              ],
+                                  if (participantLimit > 0 &&
+                                      isUpcoming &&
+                                      !isCancelled)
+                                    Text(
+                                      participantLimit - currentParticipants <=
+                                              0
+                                          ? 'No spaces left'
+                                          : '${participantLimit - currentParticipants} spaces left',
+                                      style: TextStyle(
+                                        color:
+                                            participantLimit -
+                                                        currentParticipants <=
+                                                    0
+                                                ? Colors.red
+                                                : Colors.green,
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ),
                           ],
                         ),
                       ],
                     ),
                   ),
-
                   const Divider(height: 32),
-
-                  // Event description
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Description',
+                          'About this event',
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
@@ -1115,231 +1086,60 @@ class EventCard extends StatelessWidget {
                       ],
                     ),
                   ),
-
                   const SizedBox(height: 24),
-
-                  // Admin buttons
-                  if (isAdmin)
+                  // Only show action buttons for admin and if event is upcoming and not past
+                  if (isAdmin && isUpcoming && !isPastEvent && !isCancelled)
                     Padding(
                       padding: const EdgeInsets.all(24),
                       child: Row(
                         children: [
-                          if (isUpcoming && !isCancelled)
+                          if (!isCancelled)
                             Expanded(
-                              child: ElevatedButton.icon(
+                              child: OutlinedButton.icon(
                                 onPressed: () {
-                                  Navigator.pop(context);
-                                  _showEditEventDialog(context);
+                                  _showCancelEventDialog(context);
                                 },
-                                icon: const Icon(Icons.edit),
-                                label: const Text('Edit Event'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.blue,
-                                  foregroundColor: Colors.white,
+                                icon: const Icon(
+                                  Icons.cancel,
+                                  color: Colors.red,
+                                ),
+                                label: const Text('Cancel Event'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.red,
+                                  side: const BorderSide(color: Colors.red),
                                   padding: const EdgeInsets.symmetric(
                                     vertical: 12,
                                   ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                            ),
+                          if (isCancelled) const SizedBox(width: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: () {
+                                    Navigator.pop(context);
+                                    _showEditEventDialog(context);
+                                  },
+                                  icon: const Icon(Icons.edit),
+                                  label: const Text('Edit Event'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.orangeAccent,
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 12,
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed:
-                                  isCancelled
-                                      ? null
-                                      : () => _showCancelEventDialog(context),
-                              icon: const Icon(Icons.cancel),
-                              label: const Text('Cancel Event'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.red,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 12,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                disabledBackgroundColor: Colors.grey.shade300,
-                                disabledForegroundColor: Colors.grey.shade500,
-                              ),
-                            ),
+                            ],
                           ),
                         ],
                       ),
                     ),
-
-                  const SizedBox(height: 24),
                 ],
               ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  void _showEditEventDialog(BuildContext context) {
-    final titleController = TextEditingController(text: title);
-    final descriptionController = TextEditingController(text: description);
-    final locationController = TextEditingController(text: location);
-    final participantLimitController = TextEditingController(
-      text: participantLimit > 0 ? participantLimit.toString() : '',
-    );
-
-    DateTime? selectedEventDate = eventDate;
-    TimeOfDay? selectedEventTime =
-        eventDate != null
-            ? TimeOfDay(hour: eventDate!.hour, minute: eventDate!.minute)
-            : null;
-
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(15),
-              ),
-              title: Text(
-                "Edit Event",
-                style: GoogleFonts.aclonica(fontSize: 22),
-                textAlign: TextAlign.center,
-              ),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      controller: titleController,
-                      decoration: _inputDecoration("Event Title", Icons.title),
-                    ),
-                    const SizedBox(height: 15),
-                    TextField(
-                      controller: descriptionController,
-                      maxLines: 3,
-                      maxLength: 1000,
-                      decoration: _inputDecoration(
-                        "Event Description",
-                        Icons.description,
-                      ),
-                    ),
-                    const SizedBox(height: 15),
-                    TextField(
-                      controller: locationController,
-                      decoration: _inputDecoration(
-                        "Event Location",
-                        Icons.location_on,
-                      ),
-                    ),
-                    const SizedBox(height: 15),
-                    _buildDatePickerRow(
-                      context,
-                      "Event Date",
-                      selectedEventDate,
-                      (date) => setState(() => selectedEventDate = date),
-                      Icons.event,
-                    ),
-                    const SizedBox(height: 15),
-                    _buildTimePickerRow(
-                      context,
-                      "Event Time",
-                      selectedEventTime,
-                      (time) => setState(() => selectedEventTime = time),
-                      Icons.access_time,
-                    ),
-                    const SizedBox(height: 15),
-                    TextField(
-                      controller: participantLimitController,
-                      keyboardType: TextInputType.number,
-                      decoration: _inputDecoration(
-                        "Participant Limit",
-                        Icons.people,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text(
-                    "Cancel",
-                    style: TextStyle(color: Colors.grey),
-                  ),
-                ),
-                ElevatedButton(
-                  onPressed: () async {
-                    if (titleController.text.isEmpty ||
-                        descriptionController.text.isEmpty ||
-                        locationController.text.isEmpty ||
-                        selectedEventDate == null ||
-                        selectedEventTime == null) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text("Please fill all required fields"),
-                          backgroundColor: Colors.red,
-                        ),
-                      );
-                      return;
-                    }
-
-                    // Combine date and time for event
-                    final updatedEventDateTime = DateTime(
-                      selectedEventDate!.year,
-                      selectedEventDate!.month,
-                      selectedEventDate!.day,
-                      selectedEventTime!.hour,
-                      selectedEventTime!.minute,
-                    );
-
-                    try {
-                      // Update in Firestore
-                      await FirebaseFirestore.instance
-                          .collection('events')
-                          .doc(eventId)
-                          .update({
-                            'title': titleController.text,
-                            'description': descriptionController.text,
-                            'location': locationController.text,
-                            'eventDateTime':
-                                updatedEventDateTime.toIso8601String(),
-                            'participantLimit':
-                                int.tryParse(participantLimitController.text) ??
-                                0,
-                            'updatedAt': DateTime.now().toIso8601String(),
-                          });
-
-                      Navigator.of(context).pop();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text("Event updated successfully!"),
-                          backgroundColor: Colors.green,
-                        ),
-                      );
-                    } catch (e) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text("Error updating event: $e"),
-                          backgroundColor: Colors.red,
-                        ),
-                      );
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orangeAccent,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                  child: const Text("Save"),
-                ),
-              ],
             );
           },
         );
@@ -1352,45 +1152,38 @@ class EventCard extends StatelessWidget {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(15),
-          ),
-          title: const Text("Cancel Event"),
+          title: const Text('Cancel Event'),
           content: const Text(
-            "Are you sure you want to cancel this event? This action cannot be undone, and all participants will be notified.",
+            'Are you sure you want to cancel this event? '
+            'This action cannot be undone and participants will be notified.',
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text(
-                "No, Keep Event",
-                style: TextStyle(color: Colors.grey),
-              ),
+              child: const Text('No, Keep Event'),
             ),
             ElevatedButton(
               onPressed: () async {
                 try {
-                  // Update status to cancelled in Firestore
                   await FirebaseFirestore.instance
                       .collection('events')
                       .doc(eventId)
-                      .update({
-                        'status': 'cancelled',
-                        'cancelledAt': DateTime.now().toIso8601String(),
-                      });
+                      .update({'status': 'cancelled'});
 
                   Navigator.of(context).pop();
-                  Navigator.of(context).pop(); // Close the details modal too
+                  Navigator.of(context).pop();
+
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text("Event cancelled successfully"),
+                      content: Text('Event has been cancelled'),
                       backgroundColor: Colors.orange,
                     ),
                   );
                 } catch (e) {
+                  Navigator.of(context).pop();
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text("Error cancelling event: $e"),
+                      content: Text('Error cancelling event: $e'),
                       backgroundColor: Colors.red,
                     ),
                   );
@@ -1399,11 +1192,8 @@ class EventCard extends StatelessWidget {
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.red,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
               ),
-              child: const Text("Yes, Cancel Event"),
+              child: const Text('Yes, Cancel Event'),
             ),
           ],
         );
@@ -1411,157 +1201,349 @@ class EventCard extends StatelessWidget {
     );
   }
 
-  static InputDecoration _inputDecoration(String label, IconData icon) {
-    return InputDecoration(
-      labelText: label,
-      labelStyle: const TextStyle(color: Colors.orangeAccent),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: Colors.orangeAccent, width: 2),
-      ),
-      prefixIcon: Icon(icon, color: Colors.orangeAccent),
-    );
-  }
-
-  Widget _buildDatePickerRow(
-    BuildContext context,
-    String label,
-    DateTime? selectedDate,
-    Function(DateTime) onDatePicked,
-    IconData icon,
-  ) {
-    final dateFormat = DateFormat('MMM dd, yyyy');
-    return InkWell(
-      onTap: () async {
-        final DateTime? picked = await showDatePicker(
-          context: context,
-          initialDate: selectedDate ?? DateTime.now(),
-          firstDate: DateTime.now(),
-          lastDate: DateTime(2100),
-          builder: (context, child) {
-            return Theme(
-              data: Theme.of(context).copyWith(
-                colorScheme: const ColorScheme.light(
-                  primary: Colors.orangeAccent,
-                  onPrimary: Colors.white,
-                  onSurface: Colors.black,
-                ),
+  void _showEditEventDialog(BuildContext context) {
+    FirebaseFirestore.instance
+        .collection('events')
+        .doc(eventId)
+        .get()
+        .then((snapshot) {
+          if (!snapshot.exists) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Event not found'),
+                backgroundColor: Colors.red,
               ),
-              child: child!,
             );
-          },
-        );
-        if (picked != null) {
-          onDatePicked(picked);
-        }
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 15),
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.orangeAccent),
-            const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  selectedDate != null
-                      ? dateFormat.format(selectedDate)
-                      : "Select date",
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight:
-                        selectedDate != null
-                            ? FontWeight.w500
-                            : FontWeight.normal,
-                  ),
-                ),
-              ],
-            ),
-            const Spacer(),
-            const Icon(Icons.arrow_drop_down, color: Colors.grey),
-          ],
-        ),
-      ),
-    );
-  }
+            return;
+          }
 
-  Widget _buildTimePickerRow(
-    BuildContext context,
-    String label,
-    TimeOfDay? selectedTime,
-    Function(TimeOfDay) onTimePicked,
-    IconData icon,
-  ) {
-    return InkWell(
-      onTap: () async {
-        final TimeOfDay? picked = await showTimePicker(
-          context: context,
-          initialTime: selectedTime ?? TimeOfDay.now(),
-          builder: (context, child) {
-            return Theme(
-              data: Theme.of(context).copyWith(
-                colorScheme: const ColorScheme.light(
-                  primary: Colors.orangeAccent,
-                  onPrimary: Colors.white,
-                  onSurface: Colors.black,
-                ),
-              ),
-              child: child!,
+          final data = snapshot.data() as Map<String, dynamic>;
+          final titleController = TextEditingController(text: data['title']);
+          final descriptionController = TextEditingController(
+            text: data['description'],
+          );
+          final locationController = TextEditingController(
+            text: data['location'],
+          );
+          final participantLimitController = TextEditingController(
+            text: data['participantLimit']?.toString() ?? '0',
+          );
+
+          // Parse event date and time
+          DateTime? selectedEventDate;
+          TimeOfDay? selectedEventTime;
+
+          if (data['eventDateTime'] != null) {
+            final eventDateTime = DateTime.parse(data['eventDateTime']);
+            selectedEventDate = DateTime(
+              eventDateTime.year,
+              eventDateTime.month,
+              eventDateTime.day,
             );
-          },
-        );
-        if (picked != null) {
-          onTimePicked(picked);
-        }
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 15),
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.orangeAccent),
-            const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  selectedTime != null
-                      ? selectedTime.format(context)
-                      : "Select time",
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight:
-                        selectedTime != null
-                            ? FontWeight.w500
-                            : FontWeight.normal,
-                  ),
-                ),
-              ],
+            selectedEventTime = TimeOfDay(
+              hour: eventDateTime.hour,
+              minute: eventDateTime.minute,
+            );
+          }
+
+          showDialog(
+            context: context,
+            builder: (BuildContext context) {
+              return StatefulBuilder(
+                builder: (context, setState) {
+                  // Format for displaying the date and time
+                  final dateFormat = DateFormat('MMM dd, yyyy');
+
+                  return AlertDialog(
+                    title: const Text('Edit Event'),
+                    content: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TextField(
+                            controller: titleController,
+                            decoration: _EventsPageState._inputDecoration(
+                              'Event Title',
+                              Icons.title,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          TextField(
+                            controller: descriptionController,
+                            maxLines: 3,
+                            decoration: _EventsPageState._inputDecoration(
+                              'Event Description',
+                              Icons.description,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          TextField(
+                            controller: locationController,
+                            decoration: _EventsPageState._inputDecoration(
+                              'Event Location',
+                              Icons.location_on,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Event Date Picker
+                          InkWell(
+                            onTap: () async {
+                              final picked = await showDatePicker(
+                                context: context,
+                                initialDate:
+                                    selectedEventDate ?? DateTime.now(),
+                                firstDate: DateTime.now(),
+                                lastDate: DateTime(2100),
+                                builder: (context, child) {
+                                  return Theme(
+                                    data: Theme.of(context).copyWith(
+                                      colorScheme: const ColorScheme.light(
+                                        primary: Colors.orangeAccent,
+                                        onPrimary: Colors.white,
+                                        onSurface: Colors.black,
+                                      ),
+                                    ),
+                                    child: child!,
+                                  );
+                                },
+                              );
+                              if (picked != null) {
+                                setState(() {
+                                  selectedEventDate = picked;
+                                });
+                              }
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 15,
+                              ),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.event,
+                                    color: Colors.orangeAccent,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        "Event Date",
+                                        style: TextStyle(
+                                          color: Colors.grey.shade600,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        selectedEventDate != null
+                                            ? dateFormat.format(
+                                              selectedEventDate!,
+                                            )
+                                            : "Select date",
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight:
+                                              selectedEventDate != null
+                                                  ? FontWeight.w500
+                                                  : FontWeight.normal,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const Spacer(),
+                                  const Icon(
+                                    Icons.arrow_drop_down,
+                                    color: Colors.grey,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Event Time Picker
+                          InkWell(
+                            onTap: () async {
+                              final picked = await showTimePicker(
+                                context: context,
+                                initialTime:
+                                    selectedEventTime ?? TimeOfDay.now(),
+                                builder: (context, child) {
+                                  return Theme(
+                                    data: Theme.of(context).copyWith(
+                                      colorScheme: const ColorScheme.light(
+                                        primary: Colors.orangeAccent,
+                                        onPrimary: Colors.white,
+                                        onSurface: Colors.black,
+                                      ),
+                                    ),
+                                    child: child!,
+                                  );
+                                },
+                              );
+                              if (picked != null) {
+                                setState(() {
+                                  selectedEventTime = picked;
+                                });
+                              }
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 15,
+                              ),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.access_time,
+                                    color: Colors.orangeAccent,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        "Event Time",
+                                        style: TextStyle(
+                                          color: Colors.grey.shade600,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        selectedEventTime != null
+                                            ? selectedEventTime!.format(context)
+                                            : "Select time",
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight:
+                                              selectedEventTime != null
+                                                  ? FontWeight.w500
+                                                  : FontWeight.normal,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const Spacer(),
+                                  const Icon(
+                                    Icons.arrow_drop_down,
+                                    color: Colors.grey,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+
+                          TextField(
+                            controller: participantLimitController,
+                            keyboardType: TextInputType.number,
+                            decoration: _EventsPageState._inputDecoration(
+                              'Participant Limit (0 for unlimited)',
+                              Icons.people,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                      ElevatedButton(
+                        onPressed: () async {
+                          try {
+                            if (titleController.text.isEmpty ||
+                                descriptionController.text.isEmpty ||
+                                locationController.text.isEmpty ||
+                                selectedEventDate == null ||
+                                selectedEventTime == null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Please fill all required fields',
+                                  ),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                              return;
+                            }
+
+                            // Combine date and time into a single DateTime
+                            final newEventDateTime = DateTime(
+                              selectedEventDate!.year,
+                              selectedEventDate!.month,
+                              selectedEventDate!.day,
+                              selectedEventTime!.hour,
+                              selectedEventTime!.minute,
+                            );
+
+                            await FirebaseFirestore.instance
+                                .collection('events')
+                                .doc(eventId)
+                                .update({
+                                  'title': titleController.text,
+                                  'description': descriptionController.text,
+                                  'location': locationController.text,
+                                  'eventDateTime':
+                                      newEventDateTime.toIso8601String(),
+                                  'participantLimit':
+                                      int.tryParse(
+                                        participantLimitController.text,
+                                      ) ??
+                                      0,
+                                });
+
+                            Navigator.of(context).pop();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Event updated successfully'),
+                                backgroundColor: Colors.green,
+                              ),
+                            );
+                          } catch (e) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Error updating event: $e'),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                          }
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.orangeAccent,
+                          foregroundColor: Colors.white,
+                        ),
+                        child: const Text('Save Changes'),
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
+          );
+        })
+        .catchError((error) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error loading event: $error'),
+              backgroundColor: Colors.red,
             ),
-            const Spacer(),
-            const Icon(Icons.arrow_drop_down, color: Colors.grey),
-          ],
-        ),
-      ),
-    );
+          );
+        });
   }
 }

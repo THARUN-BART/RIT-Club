@@ -24,8 +24,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   bool _isLoading = true;
   bool _hasError = false;
   Map<String, List<Map<String, dynamic>>> _clubsByCategory = {};
-  Map<String, List<Map<String, dynamic>>> _followedClubsByCategory =
-      {}; // New variable for categorized followed clubs
+  Map<String, List<Map<String, dynamic>>> _followedClubsByCategory = {};
+  String? _userEmail;
 
   // Predefined categories
   final List<String> predefinedCategories = [
@@ -52,6 +52,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _userEmail = user?.email;
     _fetchUserData();
     _fetchClubs().then((_) {
       // Initialize pages after data is loaded
@@ -59,7 +60,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         _pages.addAll([
           _buildHomeContent(),
           const EventPage(),
-          const statusPage(),
+          const StatusPage(),
         ]);
       });
     });
@@ -127,6 +128,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 
   Future<void> _fetchClubs() async {
+    setState(() {
+      _isLoading = true;
+      _hasError = false;
+    });
+
     try {
       bool clubsCollectionExists = await _checkCollectionExists('clubs');
 
@@ -150,13 +156,23 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
           String category = data['category'] ?? 'Uncategorized';
 
+          // Ensure followers is initialized
+          List<String> followers = [];
+          if (data.containsKey('followers')) {
+            followers = List<String>.from(data['followers']);
+          }
+
+          // Make sure memberCount matches followers array length
+          int memberCount = followers.length;
+
           Map<String, dynamic> clubData = {
             'id': doc.id,
             'name': data['name'] ?? 'Unknown Club',
             'description': data['description'] ?? 'No description available',
             'image': data['imageUrl'] ?? 'assets/default_club.png',
-            'memberCount': data['memberCount'] ?? 0,
+            'memberCount': memberCount,
             'category': category,
+            'followers': followers, // Store followers array for easy checking
           };
 
           clubs.add(clubData);
@@ -176,44 +192,30 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         });
       }
 
-      if (user != null) {
-        try {
-          DocumentSnapshot userDoc =
-              await FirebaseFirestore.instance
-                  .collection('users')
-                  .doc(user!.uid)
-                  .get();
+      // Now determine which clubs are followed
+      List<Map<String, dynamic>> followed = [];
 
-          List<String> followedClubIds = [];
-          if (userDoc.exists &&
-              userDoc.data() != null &&
-              (userDoc.data() as Map<String, dynamic>).containsKey(
-                'followedClubs',
-              )) {
-            followedClubIds = List<String>.from(userDoc['followedClubs']);
+      if (user != null && _userEmail != null) {
+        // For each club, check if user's email is in the followers array
+        for (var club in _allClubs) {
+          List<String> followers = [];
+          if (club.containsKey('followers')) {
+            followers = List<String>.from(club['followers']);
           }
 
-          List<Map<String, dynamic>> followed = [];
-          for (var club in _allClubs) {
-            if (followedClubIds.contains(club['id'])) {
-              followed.add(club);
-            }
+          if (followers.contains(_userEmail)) {
+            followed.add(Map<String, dynamic>.from(club));
           }
-
-          setState(() {
-            _followedClubs = followed;
-          });
-
-          // Organize followed clubs by category
-          _organizeFollowedClubsByCategory();
-        } catch (e) {
-          print('Error fetching followed clubs: $e');
         }
       }
 
       setState(() {
+        _followedClubs = followed;
         _isLoading = false;
       });
+
+      // Organize followed clubs by category
+      _organizeFollowedClubsByCategory();
     } catch (e) {
       print('Error fetching clubs: $e');
       setState(() {
@@ -236,78 +238,67 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
-  Future<void> _toggleFollowClub(String clubId, bool isFollowing) async {
-    if (user == null) {
+  Future<void> _toggleFollowClub(
+    String clubId,
+    bool isCurrentlyFollowing,
+  ) async {
+    if (user == null || _userEmail == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please log in to follow clubs')),
       );
       return;
     }
 
-    // Get club name before making any changes
-    String clubName = '';
-    for (var club in _allClubs) {
-      if (club['id'] == clubId) {
-        clubName = club['name'];
-        break;
-      }
-    }
-
-    // Show immediate feedback
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        duration: const Duration(seconds: 2),
-        content: Text(
-          isFollowing ? 'Unfollowing $clubName' : 'Following $clubName',
-        ),
-        backgroundColor: isFollowing ? Colors.red : Colors.green,
-      ),
-    );
-
-    // Optimistic UI update
-    setState(() {
-      if (isFollowing) {
-        _followedClubs.removeWhere((club) => club['id'] == clubId);
-        // Update member count in all lists
-        for (var club in _allClubs) {
-          if (club['id'] == clubId) {
-            club['memberCount'] = (club['memberCount'] ?? 1) - 1;
-            break;
-          }
-        }
-      } else {
-        Map<String, dynamic>? clubToFollow = _allClubs.firstWhere(
-          (club) => club['id'] == clubId,
-          orElse: () => <String, dynamic>{},
-        );
-
-        if (clubToFollow.isNotEmpty) {
-          clubToFollow = Map<String, dynamic>.from(clubToFollow);
-          clubToFollow['memberCount'] = (clubToFollow['memberCount'] ?? 0) + 1;
-          _followedClubs.add(clubToFollow);
-
-          // Update in all clubs lists
-          for (var club in _allClubs) {
-            if (club['id'] == clubId) {
-              club['memberCount'] = (club['memberCount'] ?? 0) + 1;
-              break;
-            }
-          }
-        }
-      }
-      _organizeFollowedClubsByCategory();
-    });
-
     try {
-      final userRef = FirebaseFirestore.instance
-          .collection('users')
-          .doc(user!.uid);
+      // Get current club data to check actual follow status
       final clubRef = FirebaseFirestore.instance
           .collection('clubs')
           .doc(clubId);
-      final userEmail = user!.email ?? '';
+      DocumentSnapshot clubDoc = await clubRef.get();
+
+      if (!clubDoc.exists) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Club not found'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      Map<String, dynamic> clubData = clubDoc.data() as Map<String, dynamic>;
+      String clubName = clubData['name'] ?? 'Unknown Club';
+      List<String> clubFollowers = [];
+
+      if (clubData.containsKey('followers')) {
+        clubFollowers = List<String>.from(clubData['followers']);
+      }
+
+      // Check if user is actually following based on database
+      bool isActuallyFollowing = clubFollowers.contains(_userEmail);
+
+      // If UI state doesn't match database state, use database state
+      if (isCurrentlyFollowing != isActuallyFollowing) {
+        isCurrentlyFollowing = isActuallyFollowing;
+      }
+
+      // Show immediate feedback
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 1),
+          content: Text(
+            isCurrentlyFollowing
+                ? 'Unfollowing $clubName'
+                : 'Following $clubName',
+          ),
+          backgroundColor: isCurrentlyFollowing ? Colors.red : Colors.green,
+        ),
+      );
 
       // Get current user data
+      final userRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(user!.uid);
       DocumentSnapshot userDoc = await userRef.get();
       Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
 
@@ -324,25 +315,16 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         );
       }
 
-      // Get current club data
-      DocumentSnapshot clubDoc = await clubRef.get();
-      Map<String, dynamic> clubData = clubDoc.data() as Map<String, dynamic>;
-      List<String> clubFollowers = [];
-
-      if (clubData.containsKey('followers')) {
-        clubFollowers = List<String>.from(clubData['followers']);
-      }
-
       // Batch update to ensure atomic operation
       final batch = FirebaseFirestore.instance.batch();
 
-      if (isFollowing) {
+      if (isCurrentlyFollowing) {
         // UNFOLLOW: Remove the club ID and name from user document
         followedClubIds.remove(clubId);
         followedClubNames.remove(clubId);
 
         // Remove user email from club's followers list
-        clubFollowers.remove(userEmail);
+        clubFollowers.remove(_userEmail);
       } else {
         // FOLLOW: Add club ID and name to user document if not already present
         if (!followedClubIds.contains(clubId)) {
@@ -351,8 +333,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         }
 
         // Add user email to club's followers list if not already present
-        if (!clubFollowers.contains(userEmail)) {
-          clubFollowers.add(userEmail);
+        if (!clubFollowers.contains(_userEmail)) {
+          clubFollowers.add(_userEmail!);
         }
       }
 
@@ -362,33 +344,92 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         'followedClubNames': followedClubNames,
       });
 
-      // Update club document
+      // Update club document with exact followers count
       batch.update(clubRef, {
-        'memberCount': FieldValue.increment(isFollowing ? -1 : 1),
+        'memberCount': clubFollowers.length,
         'followers': clubFollowers,
       });
 
       await batch.commit();
+
+      // Apply optimistic UI update
+      setState(() {
+        // Update all clubs list
+        for (var club in _allClubs) {
+          if (club['id'] == clubId) {
+            List<String> followers = List<String>.from(club['followers'] ?? []);
+
+            if (isCurrentlyFollowing) {
+              followers.remove(_userEmail);
+            } else if (!followers.contains(_userEmail)) {
+              followers.add(_userEmail!);
+            }
+
+            club['followers'] = followers;
+            club['memberCount'] = followers.length;
+            break;
+          }
+        }
+
+        // Update category lists
+        for (var category in _clubsByCategory.keys) {
+          for (var club in _clubsByCategory[category]!) {
+            if (club['id'] == clubId) {
+              List<String> followers = List<String>.from(
+                club['followers'] ?? [],
+              );
+
+              if (isCurrentlyFollowing) {
+                followers.remove(_userEmail);
+              } else if (!followers.contains(_userEmail)) {
+                followers.add(_userEmail!);
+              }
+
+              club['followers'] = followers;
+              club['memberCount'] = followers.length;
+              break;
+            }
+          }
+        }
+
+        // Update followed clubs list
+        if (isCurrentlyFollowing) {
+          _followedClubs.removeWhere((club) => club['id'] == clubId);
+        } else {
+          // Add to followed clubs if not already there
+          if (!_followedClubs.any((club) => club['id'] == clubId)) {
+            Map<String, dynamic>? clubToAdd = _allClubs.firstWhere(
+              (club) => club['id'] == clubId,
+              orElse: () => <String, dynamic>{},
+            );
+
+            if (clubToAdd.isNotEmpty) {
+              _followedClubs.add(Map<String, dynamic>.from(clubToAdd));
+            }
+          }
+        }
+
+        // Re-organize followed clubs
+        _organizeFollowedClubsByCategory();
+      });
 
       // Show success message
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 2),
           content: Text(
-            isFollowing
+            isCurrentlyFollowing
                 ? 'Successfully unfollowed $clubName'
                 : 'Successfully followed $clubName',
           ),
-          backgroundColor: isFollowing ? Colors.red : Colors.green,
+          backgroundColor: isCurrentlyFollowing ? Colors.red : Colors.green,
         ),
       );
 
       // Refresh data to ensure consistency
-      await _fetchClubs();
+      _fetchClubs();
     } catch (e) {
       print('Error toggling club follow: $e');
-      // Revert optimistic update
-      await _fetchClubs();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 2),
@@ -396,6 +437,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           backgroundColor: Colors.red,
         ),
       );
+      // Refresh data to revert any incorrect UI updates
+      _fetchClubs();
     }
   }
 
@@ -408,6 +451,17 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     } else {
       return 'Good Evening, $_userName!';
     }
+  }
+
+  bool _isClubFollowed(Map<String, dynamic> club) {
+    if (_userEmail == null) return false;
+
+    List<String> followers = [];
+    if (club.containsKey('followers')) {
+      followers = List<String>.from(club['followers']);
+    }
+
+    return followers.contains(_userEmail);
   }
 
   Widget _buildCategorizedClubsList(
@@ -457,9 +511,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               itemCount: clubsInCategory.length,
               itemBuilder: (context, clubIndex) {
                 final club = clubsInCategory[clubIndex];
-                final isFollowing = _followedClubs.any(
-                  (c) => c['id'] == club['id'],
-                );
+                final isFollowing = _isClubFollowed(club);
 
                 return Card(
                   elevation: 2,

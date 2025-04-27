@@ -3,11 +3,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
-import 'package:file_picker/file_picker.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'dart:io';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 class EventPage extends StatefulWidget {
   const EventPage({super.key});
@@ -19,22 +14,55 @@ class EventPage extends StatefulWidget {
 class _EventPageState extends State<EventPage> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseStorage _storage = FirebaseStorage.instance;
 
   List<DocumentSnapshot> _events = [];
   List<DocumentSnapshot> _filteredEvents = [];
-  List<String> _followedClubs = [];
-  String _selectedFilter = "Following";
+  List<DocumentSnapshot> _followedEvents = [];
+  List<String> _followedClubNames = [];
+  List<String> _participatedEventIds = []; // Track participated event IDs
+  int _odCount = 0; // Track user's OD count
+  DateTime? _lastOdResetDate; // Track when OD count was last reset
+  String _selectedFilter = "All";
   bool _isLoading = true;
-  bool _isAdmin = false;
+  // Add a map to track user participation status for each event
+  Map<String, bool> _participationStatus = {};
 
   @override
   void initState() {
     super.initState();
     _fetchUserData().then((_) {
-      _fetchEvents(); // Fetch events after we have user data
-      _checkAdminStatus(); // Check if user is admin
+      _fetchEvents();
+      _checkOdReset(); // Check if OD count needs reset
     });
+  }
+
+  // New method to check if OD count needs to be reset (after 3 months)
+  Future<void> _checkOdReset() async {
+    if (_lastOdResetDate != null) {
+      DateTime threeMonthsAgo = DateTime.now().subtract(
+        const Duration(days: 90),
+      );
+      if (_lastOdResetDate!.isBefore(threeMonthsAgo)) {
+        // Reset OD count if it's been more than 3 months
+        await _resetOdCount();
+      }
+    }
+  }
+
+  // New method to reset OD count
+  Future<void> _resetOdCount() async {
+    User? currentUser = _auth.currentUser;
+    if (currentUser != null) {
+      await _firestore.collection('users').doc(currentUser.uid).update({
+        'odCount': 0,
+        'lastOdResetDate': FieldValue.serverTimestamp(),
+      });
+
+      setState(() {
+        _odCount = 0;
+        _lastOdResetDate = DateTime.now();
+      });
+    }
   }
 
   Future<void> _fetchEvents() async {
@@ -43,15 +71,44 @@ class _EventPageState extends State<EventPage> {
     });
 
     try {
-      QuerySnapshot eventSnapshot = await _firestore.collection('events').get();
+      QuerySnapshot eventSnapshot =
+          await _firestore
+              .collection('events')
+              .where('status', isEqualTo: 'active')
+              .get();
+
       setState(() {
         _events = eventSnapshot.docs;
-        // Apply the default filter (Following) immediately after loading
-        _filteredEvents =
+
+        // Apply filter based on current selection
+        if (_selectedFilter == "All") {
+          _filteredEvents = _events;
+        } else if (_selectedFilter == "Following") {
+          _filteredEvents =
+              _events.where((event) {
+                String clubName = event['clubName'] as String;
+                return _followedClubNames.contains(clubName);
+              }).toList();
+        } else {
+          // Filter by specific club name
+          _filteredEvents =
+              _events
+                  .where((event) => event['clubName'] == _selectedFilter)
+                  .toList();
+        }
+
+        // Always populate followed events for the followed section
+        _followedEvents =
             _events.where((event) {
-              String clubId = event['clubId'];
-              return _followedClubs.contains(clubId);
+              String clubName = event['clubName'] as String;
+              return _followedClubNames.contains(clubName);
             }).toList();
+      });
+
+      // Check participation status for all events
+      await _checkUserParticipation();
+
+      setState(() {
         _isLoading = false;
       });
     } catch (e) {
@@ -62,6 +119,36 @@ class _EventPageState extends State<EventPage> {
     }
   }
 
+  // Modified method to check if the user has participated in each event
+  Future<void> _checkUserParticipation() async {
+    User? currentUser = _auth.currentUser;
+    if (currentUser == null) return;
+
+    // Initialize participation status map
+    Map<String, bool> status = {};
+
+    // Check participation for each event
+    for (var event in _events) {
+      try {
+        DocumentSnapshot participantDoc =
+            await _firestore
+                .collection('events')
+                .doc(event.id)
+                .collection('participants')
+                .doc(currentUser.uid)
+                .get();
+
+        status[event.id] = participantDoc.exists;
+      } catch (e) {
+        status[event.id] = false;
+      }
+    }
+
+    setState(() {
+      _participationStatus = status;
+    });
+  }
+
   Future<void> _fetchUserData() async {
     try {
       User? currentUser = _auth.currentUser;
@@ -70,10 +157,56 @@ class _EventPageState extends State<EventPage> {
             await _firestore.collection('users').doc(currentUser.uid).get();
 
         if (userDoc.exists) {
-          setState(() {
-            _followedClubs = List<String>.from(
-              userDoc.get('followedClubs') ?? [],
+          // Make sure we're properly retrieving the followedClubNames field
+          var followedClubNamesData = userDoc.get('followedClubNames');
+
+          List<String> followedClubNamesList = [];
+
+          // Handle different data types returned from Firestore
+          if (followedClubNamesData is List) {
+            followedClubNamesList = List<String>.from(
+              followedClubNamesData.map((item) => item.toString()),
             );
+          } else if (followedClubNamesData is Map) {
+            followedClubNamesList = List<String>.from(
+              followedClubNamesData.keys,
+            );
+          }
+
+          // Get participated event IDs
+          List<String> participatedEventIdsList = [];
+          var participatedEventsData = userDoc.get('participatedEventIds');
+          if (participatedEventsData != null) {
+            if (participatedEventsData is List) {
+              participatedEventIdsList = List<String>.from(
+                participatedEventsData.map((item) => item.toString()),
+              );
+            } else if (participatedEventsData is Map) {
+              participatedEventIdsList = List<String>.from(
+                participatedEventsData.keys,
+              );
+            }
+          }
+
+          // Get OD count
+          int odCount = 0;
+          var odCountData = userDoc.get('odCount');
+          if (odCountData != null) {
+            odCount = odCountData is int ? odCountData : 0;
+          }
+
+          // Get last OD reset date
+          DateTime? lastOdResetDate;
+          var lastOdResetData = userDoc.get('lastOdResetDate');
+          if (lastOdResetData != null && lastOdResetData is Timestamp) {
+            lastOdResetDate = lastOdResetData.toDate();
+          }
+
+          setState(() {
+            _followedClubNames = followedClubNamesList;
+            _participatedEventIds = participatedEventIdsList;
+            _odCount = odCount;
+            _lastOdResetDate = lastOdResetDate;
           });
         }
       }
@@ -82,43 +215,8 @@ class _EventPageState extends State<EventPage> {
     }
   }
 
-  Future<void> _checkAdminStatus() async {
-    try {
-      User? currentUser = _auth.currentUser;
-      if (currentUser != null) {
-        DocumentSnapshot userDoc =
-            await _firestore.collection('users').doc(currentUser.uid).get();
-
-        if (userDoc.exists) {
-          setState(() {
-            _isAdmin = userDoc.get('isAdmin') ?? false;
-          });
-        }
-      }
-    } catch (e) {
-      _showErrorSnackBar('Failed to check admin status: $e');
-    }
-  }
-
-  void _filterEvents(String filter) {
-    setState(() {
-      _selectedFilter = filter;
-
-      if (filter == "All") {
-        _filteredEvents = _events;
-      } else if (filter == "Following") {
-        _filteredEvents =
-            _events.where((event) {
-              String clubId = event['clubId'];
-              return _followedClubs.contains(clubId);
-            }).toList();
-      } else {
-        // Filter by specific club name
-        _filteredEvents =
-            _events.where((event) => event['clubName'] == filter).toList();
-      }
-    });
-  }
+  // The important part is in the _registerForEvent method where we
+  // update the user document with the event ID
 
   Future<void> _registerForEvent(DocumentSnapshot event) async {
     try {
@@ -148,15 +246,30 @@ class _EventPageState extends State<EventPage> {
       }
 
       // Check if user already registered
-      QuerySnapshot existingRegistration =
+      DocumentSnapshot existingRegistration =
           await _firestore
-              .collection('event_registrations')
-              .where('eventId', isEqualTo: event.id)
-              .where('userId', isEqualTo: currentUser.uid)
+              .collection('events')
+              .doc(event.id)
+              .collection('participants')
+              .doc(currentUser.uid)
               .get();
 
-      if (existingRegistration.docs.isNotEmpty) {
+      if (existingRegistration.exists) {
         _showErrorSnackBar('You have already registered for this event');
+        return;
+      }
+
+      // Check if user has reached OD limit (3)
+      int currentOdCount = 0;
+      if (userDoc.data() is Map<String, dynamic>) {
+        Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
+        currentOdCount = userData['odCount'] ?? 0;
+      }
+
+      if (currentOdCount >= 3) {
+        _showErrorSnackBar(
+          'You have reached your OD limit (3 events). Please wait for reset after 3 months.',
+        );
         return;
       }
 
@@ -166,21 +279,68 @@ class _EventPageState extends State<EventPage> {
         return; // User cancelled the dialog
       }
 
-      // Add registration to event registrations collection
-      await _firestore.collection('event_registrations').add({
-        'eventId': event.id,
-        'userId': currentUser.uid,
-        'name': userDoc['name'],
-        'regNo': userDoc['regNo'],
-        'department': userDoc['department'],
-        'phoneNumber': phoneNumber,
-        'registeredAt': FieldValue.serverTimestamp(),
-        'offerLetterUrl': null,
-      });
+      // Add registration to participants subcollection of the event
+      await _firestore
+          .collection('events')
+          .doc(event.id)
+          .collection('participants')
+          .doc(currentUser.uid)
+          .set({
+            'name': userDoc['name'],
+            'regNo': userDoc['regNo'],
+            'department': userDoc['department'],
+            'phoneNumber': phoneNumber,
+            'registeredAt': FieldValue.serverTimestamp(),
+          });
 
       // Update event participants count
       await _firestore.collection('events').doc(event.id).update({
         'participants': FieldValue.increment(1),
+      });
+
+      // Get existing participated events from user document
+      List<String> participatedEventIds = [];
+      if (userDoc.data() is Map<String, dynamic>) {
+        Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
+        if (userData['participatedEventIds'] is List) {
+          participatedEventIds = List<String>.from(
+            userData['participatedEventIds'],
+          );
+        }
+      }
+
+      // Add new event ID to the list if not already there
+      if (!participatedEventIds.contains(event.id)) {
+        participatedEventIds.add(event.id);
+      }
+
+      // Update OD count
+      int newOdCount = currentOdCount + 1;
+
+      // Get current time for lastOdResetDate if it doesn't exist
+      DateTime now = DateTime.now();
+      Timestamp? lastOdResetDate;
+      if (userDoc.data() is Map<String, dynamic>) {
+        Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
+        if (userData['lastOdResetDate'] is Timestamp) {
+          lastOdResetDate = userData['lastOdResetDate'] as Timestamp;
+        }
+      }
+
+      // Update user document with new event ID and OD count
+      await _firestore.collection('users').doc(currentUser.uid).update({
+        'participatedEventIds': participatedEventIds,
+        'odCount': newOdCount,
+        'lastOdResetDate': lastOdResetDate ?? Timestamp.fromDate(now),
+      });
+
+      // Update local state
+      setState(() {
+        _participationStatus[event.id] = true;
+        if (_participatedEventIds.contains(event.id) == false) {
+          _participatedEventIds.add(event.id);
+        }
+        _odCount = newOdCount;
       });
 
       _showSuccessSnackBar('Successfully registered for ${event['title']}');
@@ -197,15 +357,15 @@ class _EventPageState extends State<EventPage> {
       context: context,
       builder:
           (context) => AlertDialog(
-            title: Text('Enter Phone Number'),
+            title: const Text('Enter Phone Number'),
             content: TextField(
               controller: phoneController,
               keyboardType: TextInputType.phone,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 hintText: 'Phone Number',
                 prefixIcon: Icon(Icons.phone),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(20),
+                  borderRadius: BorderRadius.all(Radius.circular(20)),
                   borderSide: BorderSide(color: Colors.grey, width: 1.0),
                 ),
               ),
@@ -213,7 +373,7 @@ class _EventPageState extends State<EventPage> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
-                child: Text('Cancel'),
+                child: const Text('Cancel'),
               ),
               ElevatedButton(
                 onPressed: () {
@@ -223,7 +383,7 @@ class _EventPageState extends State<EventPage> {
                     Navigator.pop(context, phoneNumber);
                   } else {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
+                      const SnackBar(
                         content: Text(
                           'Please enter a valid 10-digit phone number starting with 6-9',
                         ),
@@ -232,11 +392,35 @@ class _EventPageState extends State<EventPage> {
                     );
                   }
                 },
-                child: Text('Submit'),
+                child: const Text('Submit'),
               ),
             ],
           ),
     );
+  }
+
+  void _filterEvents(String filter) {
+    setState(() {
+      _selectedFilter = filter;
+
+      if (filter == "All") {
+        _filteredEvents = _events;
+      } else if (filter == "Following") {
+        _filteredEvents =
+            _events.where((event) {
+              try {
+                String clubName = event['clubName'] as String;
+                return _followedClubNames.contains(clubName);
+              } catch (e) {
+                return false;
+              }
+            }).toList();
+      } else {
+        // Filter by specific club name
+        _filteredEvents =
+            _events.where((event) => event['clubName'] == filter).toList();
+      }
+    });
   }
 
   void _showFilterBottomSheet() {
@@ -246,19 +430,19 @@ class _EventPageState extends State<EventPage> {
         return StatefulBuilder(
           builder: (context, setModalState) {
             return Container(
-              padding: EdgeInsets.all(16),
+              padding: const EdgeInsets.all(16),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
+                  const Text(
                     'Filter Events',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
-                  SizedBox(height: 16),
+                  const SizedBox(height: 16),
                   ListTile(
-                    title: Text('All Events'),
+                    title: const Text('All Events'),
                     leading: Radio(
-                      value: 'All',
+                      value: "All",
                       groupValue: _selectedFilter,
                       onChanged: (value) {
                         setModalState(() {
@@ -270,9 +454,9 @@ class _EventPageState extends State<EventPage> {
                     ),
                   ),
                   ListTile(
-                    title: Text('Following Clubs'),
+                    title: const Text('Followed Clubs Only'),
                     leading: Radio(
-                      value: 'Following',
+                      value: "Following",
                       groupValue: _selectedFilter,
                       onChanged: (value) {
                         setModalState(() {
@@ -283,18 +467,28 @@ class _EventPageState extends State<EventPage> {
                       },
                     ),
                   ),
-                  Divider(),
+                  const Divider(),
+                  const Text(
+                    'Filter by Specific Club',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                    textAlign: TextAlign.start,
+                  ),
+                  const SizedBox(height: 8),
                   Expanded(
                     child: FutureBuilder<QuerySnapshot>(
                       future: _firestore.collection('clubs').get(),
                       builder: (context, snapshot) {
                         if (snapshot.connectionState ==
                             ConnectionState.waiting) {
-                          return Center(child: CircularProgressIndicator());
+                          return const Center(
+                            child: CircularProgressIndicator(),
+                          );
                         }
 
                         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                          return Center(child: Text('No clubs available'));
+                          return const Center(
+                            child: Text('No clubs available'),
+                          );
                         }
 
                         return ListView.builder(
@@ -303,8 +497,20 @@ class _EventPageState extends State<EventPage> {
                           itemBuilder: (context, index) {
                             String clubName =
                                 snapshot.data!.docs[index]['name'];
+                            String clubId = snapshot.data!.docs[index].id;
+                            bool isFollowed = _followedClubNames.contains(
+                              clubName,
+                            );
+
                             return ListTile(
                               title: Text(clubName),
+                              subtitle:
+                                  isFollowed
+                                      ? const Text(
+                                        'Following',
+                                        style: TextStyle(color: Colors.green),
+                                      )
+                                      : null,
                               leading: Radio(
                                 value: clubName,
                                 groupValue: _selectedFilter,
@@ -331,230 +537,6 @@ class _EventPageState extends State<EventPage> {
     );
   }
 
-  Future<void> _editEventDateTime(DocumentSnapshot event) async {
-    DateTime? currentEventDateTime = _parseDateTime(event['eventDateTime']);
-    DateTime? currentRegistrationDateTime = _parseDateTime(
-      event['registrationDateTime'],
-    );
-
-    final result = await showDialog<Map<String, DateTime?>>(
-      context: context,
-      builder:
-          (context) => DateTimeEditDialog(
-            eventDateTime: currentEventDateTime ?? DateTime.now(),
-            registrationDeadline: currentRegistrationDateTime ?? DateTime.now(),
-          ),
-    );
-
-    if (result != null) {
-      try {
-        await _firestore.collection('events').doc(event.id).update({
-          'eventDateTime': result['eventDateTime']!.toIso8601String(),
-          'registrationDateTime':
-              result['registrationDeadline']!.toIso8601String(),
-        });
-
-        _showSuccessSnackBar('Event dates updated successfully');
-        _fetchEvents(); // Refresh events
-      } catch (e) {
-        _showErrorSnackBar('Failed to update event dates: $e');
-      }
-    }
-  }
-
-  Future<void> _showParticipantsAndUploadOfferLetters(
-    DocumentSnapshot event,
-  ) async {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) {
-        return Container(
-          padding: EdgeInsets.all(16),
-          height: MediaQuery.of(context).size.height * 0.75,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Event Participants',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-              Text(
-                event['title'],
-                style: TextStyle(fontSize: 16, color: Colors.grey[700]),
-              ),
-              SizedBox(height: 16),
-              Text(
-                'Upload offer letters after registration deadline has passed',
-                style: TextStyle(fontSize: 14, color: Colors.blue),
-              ),
-              SizedBox(height: 16),
-              Expanded(
-                child: FutureBuilder<QuerySnapshot>(
-                  future:
-                      _firestore
-                          .collection('event_registrations')
-                          .where('eventId', isEqualTo: event.id)
-                          .get(),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return Center(child: CircularProgressIndicator());
-                    }
-
-                    if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                      return Center(child: Text('No participants yet'));
-                    }
-
-                    List<DocumentSnapshot> participants = snapshot.data!.docs;
-
-                    return ListView.builder(
-                      itemCount: participants.length,
-                      itemBuilder: (context, index) {
-                        DocumentSnapshot participant = participants[index];
-                        String name = participant['name'] ?? 'Unknown';
-                        String regNo = participant['regNo'] ?? 'Unknown';
-                        String phone = participant['phoneNumber'] ?? 'Unknown';
-                        String? offerLetterUrl = participant['offerLetterUrl'];
-
-                        return Card(
-                          margin: EdgeInsets.only(bottom: 8),
-                          child: ListTile(
-                            title: Text(name),
-                            subtitle: Text('Reg No: $regNo • Phone: $phone'),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (offerLetterUrl != null)
-                                  IconButton(
-                                    icon: Icon(
-                                      Icons.remove_red_eye,
-                                      color: Colors.blue,
-                                    ),
-                                    onPressed: () => _viewPdf(offerLetterUrl),
-                                    tooltip: 'View Offer Letter',
-                                  ),
-                                IconButton(
-                                  icon: Icon(Icons.upload_file),
-                                  onPressed: () async {
-                                    DateTime? registrationDeadline =
-                                        _parseDateTime(
-                                          event['registrationDateTime'],
-                                        );
-                                    if (registrationDeadline != null &&
-                                        registrationDeadline.isAfter(
-                                          DateTime.now(),
-                                        )) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                            'Cannot upload offer letters until registration deadline passes',
-                                          ),
-                                          backgroundColor: Colors.red,
-                                        ),
-                                      );
-                                      return;
-                                    }
-                                    await _uploadOfferLetter(participant.id);
-                                  },
-                                  tooltip: 'Upload Offer Letter',
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _uploadOfferLetter(String registrationId) async {
-    try {
-      // Request storage permission
-      var status = await Permission.storage.request();
-      if (!status.isGranted) {
-        _showErrorSnackBar('Storage permission is required');
-        return;
-      }
-
-      // Pick file
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['pdf'],
-      );
-
-      if (result == null || result.files.single.path == null) {
-        return;
-      }
-
-      File file = File(result.files.single.path!);
-
-      // Show loading indicator
-      _showLoadingDialog('Uploading offer letter...');
-
-      // Upload to Firebase Storage
-      String fileName =
-          'offer_letters/$registrationId-${DateTime.now().millisecondsSinceEpoch}.pdf';
-      TaskSnapshot uploadTask = await _storage.ref(fileName).putFile(file);
-      String downloadUrl = await uploadTask.ref.getDownloadURL();
-
-      // Update registration in Firestore
-      await _firestore
-          .collection('event_registrations')
-          .doc(registrationId)
-          .update({
-            'offerLetterUrl': downloadUrl,
-            'offerLetterUploadedAt': FieldValue.serverTimestamp(),
-          });
-
-      // Hide loading indicator
-      Navigator.pop(context);
-
-      _showSuccessSnackBar('Offer letter uploaded successfully');
-    } catch (e) {
-      // Hide loading if visible
-      if (Navigator.canPop(context)) {
-        Navigator.pop(context);
-      }
-      _showErrorSnackBar('Failed to upload offer letter: $e');
-    }
-  }
-
-  Future<void> _viewPdf(String url) async {
-    final Uri uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
-      _showErrorSnackBar('Could not open PDF');
-    }
-  }
-
-  void _showLoadingDialog(String message) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          content: Row(
-            children: [
-              CircularProgressIndicator(),
-              SizedBox(width: 20),
-              Text(message),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
   void _showErrorSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), backgroundColor: Colors.red),
@@ -565,6 +547,16 @@ class _EventPageState extends State<EventPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), backgroundColor: Colors.green),
     );
+  }
+
+  DateTime? _parseDateTime(dynamic dateTimeStr) {
+    if (dateTimeStr == null || dateTimeStr is! String) return null;
+
+    try {
+      return DateTime.parse(dateTimeStr);
+    } catch (e) {
+      return null;
+    }
   }
 
   @override
@@ -578,48 +570,162 @@ class _EventPageState extends State<EventPage> {
         centerTitle: true,
         actions: [
           IconButton(
-            icon: Icon(Icons.filter_list),
+            icon: const Icon(Icons.filter_list),
             onPressed: _showFilterBottomSheet,
+          ),
+          // Add OD count indicator to app bar
+          Center(
+            child: Container(
+              margin: const EdgeInsets.only(right: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: _odCount >= 3 ? Colors.red : Colors.green,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                'OD: $_odCount/3',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
           ),
         ],
       ),
       body:
           _isLoading
-              ? Center(child: CircularProgressIndicator())
-              : _filteredEvents.isEmpty
-              ? Center(
+              ? const Center(child: CircularProgressIndicator())
+              : SingleChildScrollView(
                 child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.event_busy, size: 50, color: Colors.grey),
-                    SizedBox(height: 16),
-                    Text('No events available', style: TextStyle(fontSize: 18)),
-                    if (_selectedFilter == "Following")
-                      Text(
-                        'Follow some clubs to see their events',
-                        style: TextStyle(color: Colors.grey),
+                    // Followed Clubs Events Section
+                    if (_followedEvents.isNotEmpty) ...[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                        child: Text(
+                          "Events from Clubs You Follow",
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.orangeAccent[700],
+                          ),
+                        ),
                       ),
+                      Container(
+                        height: 260,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: ListView.builder(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: _followedEvents.length,
+                          itemBuilder: (context, index) {
+                            DocumentSnapshot event = _followedEvents[index];
+                            return SizedBox(
+                              width: MediaQuery.of(context).size.width * 0.85,
+                              child: EventCard(
+                                event: event,
+                                onRegister: () => _registerForEvent(event),
+                                // Pass participation status to EventCard
+                                hasParticipated:
+                                    _participationStatus[event.id] ?? false,
+                                odCount: _odCount,
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const Divider(thickness: 1, height: 32),
+                    ] else if (_followedClubNames.isNotEmpty) ...[
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.grey[100],
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.info_outline,
+                                color: Colors.grey,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  "The clubs you follow don't have any upcoming events",
+                                  style: TextStyle(color: Colors.grey[700]),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+
+                    // All/Filtered Events Section
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                      child: Text(
+                        _selectedFilter == "All"
+                            ? "All Events"
+                            : _selectedFilter == "Following"
+                            ? "Events from Clubs You Follow"
+                            : "Events from $_selectedFilter",
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    _filteredEvents.isEmpty
+                        ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(32),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(
+                                  Icons.event_busy,
+                                  size: 50,
+                                  color: Colors.grey,
+                                ),
+                                const SizedBox(height: 16),
+                                const Text(
+                                  'No events available',
+                                  style: TextStyle(fontSize: 18),
+                                ),
+                                if (_selectedFilter == "Following")
+                                  Text(
+                                    _followedClubNames.isEmpty
+                                        ? 'You are not following any clubs'
+                                        : 'Followed clubs have no upcoming events',
+                                    style: const TextStyle(color: Colors.grey),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        )
+                        : ListView.builder(
+                          itemCount: _filteredEvents.length,
+                          padding: const EdgeInsets.all(16),
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          itemBuilder: (context, index) {
+                            DocumentSnapshot event = _filteredEvents[index];
+                            return EventCard(
+                              event: event,
+                              onRegister: () => _registerForEvent(event),
+                              // Pass participation status to EventCard
+                              hasParticipated:
+                                  _participationStatus[event.id] ?? false,
+                              odCount: _odCount,
+                            );
+                          },
+                        ),
                   ],
                 ),
-              )
-              : ListView.builder(
-                itemCount: _filteredEvents.length,
-                padding: EdgeInsets.all(16),
-                itemBuilder: (context, index) {
-                  DocumentSnapshot event = _filteredEvents[index];
-                  return EventCard(
-                    event: event,
-                    onRegister: () => _registerForEvent(event),
-                    isAdmin: _isAdmin,
-                    onEditDateTime:
-                        _isAdmin ? () => _editEventDateTime(event) : null,
-                    onViewParticipants:
-                        _isAdmin
-                            ? () =>
-                                _showParticipantsAndUploadOfferLetters(event)
-                            : null,
-                  );
-                },
               ),
     );
   }
@@ -628,17 +734,17 @@ class _EventPageState extends State<EventPage> {
 class EventCard extends StatelessWidget {
   final DocumentSnapshot event;
   final VoidCallback onRegister;
-  final bool isAdmin;
-  final VoidCallback? onEditDateTime;
-  final VoidCallback? onViewParticipants;
+  // Add a new property to track participation status
+  final bool hasParticipated;
+  // Add a new property to display OD count
+  final int odCount;
 
   const EventCard({
     super.key,
     required this.event,
     required this.onRegister,
-    this.isAdmin = false,
-    this.onEditDateTime,
-    this.onViewParticipants,
+    required this.hasParticipated,
+    required this.odCount,
   });
 
   @override
@@ -658,9 +764,12 @@ class EventCard extends StatelessWidget {
         registrationDeadline != null &&
         registrationDeadline.isBefore(DateTime.now());
 
+    // Check if user has reached OD limit
+    bool hasReachedOdLimit = odCount >= 3;
+
     return Card(
       elevation: 4,
-      margin: EdgeInsets.only(bottom: 16),
+      margin: const EdgeInsets.only(bottom: 16),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: Colors.orangeAccent.withOpacity(0.3), width: 1),
@@ -670,10 +779,10 @@ class EventCard extends StatelessWidget {
         children: [
           Container(
             width: double.infinity,
-            padding: EdgeInsets.all(16),
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: Colors.orangeAccent.withOpacity(0.1),
-              borderRadius: BorderRadius.only(
+              borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(12),
                 topRight: Radius.circular(12),
               ),
@@ -684,20 +793,20 @@ class EventCard extends StatelessWidget {
                   backgroundColor: Colors.orangeAccent,
                   child: Text(
                     event['clubName'][0],
-                    style: TextStyle(
+                    style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
-                SizedBox(width: 12),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         event['title'],
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
                         ),
@@ -710,7 +819,10 @@ class EventCard extends StatelessWidget {
                   ),
                 ),
                 Container(
-                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color:
                         event['status'] == 'active' ? Colors.green : Colors.red,
@@ -718,60 +830,61 @@ class EventCard extends StatelessWidget {
                   ),
                   child: Text(
                     event['status'],
-                    style: TextStyle(color: Colors.white, fontSize: 12),
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
                   ),
                 ),
               ],
             ),
           ),
           Padding(
-            padding: EdgeInsets.all(16),
+            padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(event['description'], style: TextStyle(fontSize: 14)),
-                SizedBox(height: 16),
+                Text(
+                  event['description'],
+                  style: const TextStyle(fontSize: 14),
+                ),
+                const SizedBox(height: 16),
                 Row(
                   children: [
-                    Icon(Icons.access_time, size: 16, color: Colors.grey),
-                    SizedBox(width: 4),
+                    const Icon(Icons.access_time, size: 16, color: Colors.grey),
+                    const SizedBox(width: 4),
                     Text(
                       eventDateTime != null
                           ? DateFormat(
                             'MMM dd, yyyy • hh:mm a',
                           ).format(eventDateTime)
                           : 'Date not available',
-                      style: TextStyle(color: Colors.grey),
+                      style: const TextStyle(color: Colors.grey),
                     ),
-                    if (isAdmin && onEditDateTime != null)
-                      IconButton(
-                        icon: Icon(Icons.edit, size: 16),
-                        onPressed: onEditDateTime,
-                        tooltip: 'Edit Event Date/Time',
-                      ),
                   ],
                 ),
-                SizedBox(height: 4),
+                const SizedBox(height: 4),
                 Row(
                   children: [
-                    Icon(
+                    const Icon(
                       Icons.location_on_outlined,
                       size: 16,
                       color: Colors.grey,
                     ),
-                    SizedBox(width: 4),
+                    const SizedBox(width: 4),
                     Text(
                       event['location'],
-                      style: TextStyle(color: Colors.grey),
+                      style: const TextStyle(color: Colors.grey),
                     ),
                   ],
                 ),
-                SizedBox(height: 16),
+                const SizedBox(height: 16),
                 if (registrationDeadline != null)
                   Row(
                     children: [
-                      Icon(Icons.calendar_today, size: 16, color: Colors.grey),
-                      SizedBox(width: 4),
+                      const Icon(
+                        Icons.calendar_today,
+                        size: 16,
+                        color: Colors.grey,
+                      ),
+                      const SizedBox(width: 4),
                       Text(
                         'Registration Deadline: ${DateFormat('MMM dd, yyyy • hh:mm a').format(registrationDeadline)}',
                         style: TextStyle(
@@ -785,42 +898,68 @@ class EventCard extends StatelessWidget {
                       ),
                     ],
                   ),
-                SizedBox(height: 16),
+                const SizedBox(height: 16),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      children: [
-                        Text(
-                          '${event['participants'] ?? 0}/${event['participantLimit'] ?? "∞"} registered',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: isFull ? Colors.red : Colors.blue,
+                    Text(
+                      '${event['participants'] ?? 0}/${event['participantLimit'] ?? "∞"} registered',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: isFull ? Colors.red : Colors.blue,
+                      ),
+                    ),
+                    // Show different button based on participation status
+                    hasParticipated
+                        ? Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.green,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(
+                                Icons.check_circle,
+                                color: Colors.white,
+                                size: 16,
+                              ),
+                              SizedBox(width: 4),
+                              Text(
+                                'Participated',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                        : ElevatedButton(
+                          onPressed:
+                              (isFull ||
+                                      isRegistrationClosed ||
+                                      hasReachedOdLimit)
+                                  ? null
+                                  : onRegister,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.orangeAccent,
+                            foregroundColor: Colors.white,
+                          ),
+                          child: Text(
+                            isFull
+                                ? 'Event Full'
+                                : isRegistrationClosed
+                                ? 'Registration Closed'
+                                : hasReachedOdLimit
+                                ? 'OD Limit Reached'
+                                : 'Register',
                           ),
                         ),
-                        if (isAdmin && onViewParticipants != null)
-                          IconButton(
-                            icon: Icon(Icons.people, size: 16),
-                            onPressed: onViewParticipants,
-                            tooltip: 'View Participants & Upload Offer Letters',
-                          ),
-                      ],
-                    ),
-                    ElevatedButton(
-                      onPressed:
-                          (isFull || isRegistrationClosed) ? null : onRegister,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.orangeAccent,
-                        foregroundColor: Colors.white,
-                      ),
-                      child: Text(
-                        isFull
-                            ? 'Event Full'
-                            : isRegistrationClosed
-                            ? 'Registration Closed'
-                            : 'Register',
-                      ),
-                    ),
                   ],
                 ),
               ],
@@ -839,184 +978,5 @@ class EventCard extends StatelessWidget {
     } catch (e) {
       return null;
     }
-  }
-}
-
-class DateTimeEditDialog extends StatefulWidget {
-  final DateTime eventDateTime;
-  final DateTime registrationDeadline;
-
-  const DateTimeEditDialog({
-    super.key,
-    required this.eventDateTime,
-    required this.registrationDeadline,
-  });
-
-  @override
-  State<DateTimeEditDialog> createState() => _DateTimeEditDialogState();
-}
-
-class _DateTimeEditDialogState extends State<DateTimeEditDialog> {
-  late DateTime _eventDateTime;
-  late DateTime _registrationDeadline;
-
-  @override
-  void initState() {
-    super.initState();
-    _eventDateTime = widget.eventDateTime;
-    _registrationDeadline = widget.registrationDeadline;
-  }
-
-  Future<void> _selectEventDate() async {
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: _eventDateTime,
-      firstDate: DateTime.now(),
-      lastDate: DateTime.now().add(Duration(days: 365)),
-    );
-
-    if (picked != null) {
-      final TimeOfDay? pickedTime = await showTimePicker(
-        context: context,
-        initialTime: TimeOfDay.fromDateTime(_eventDateTime),
-      );
-
-      if (pickedTime != null) {
-        setState(() {
-          _eventDateTime = DateTime(
-            picked.year,
-            picked.month,
-            picked.day,
-            pickedTime.hour,
-            pickedTime.minute,
-          );
-        });
-      }
-    }
-  }
-
-  Future<void> _selectRegistrationDeadline() async {
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: _registrationDeadline,
-      firstDate: DateTime.now(),
-      lastDate: _eventDateTime, // Registration must end before event starts
-    );
-
-    if (picked != null) {
-      final TimeOfDay? pickedTime = await showTimePicker(
-        context: context,
-        initialTime: TimeOfDay.fromDateTime(_registrationDeadline),
-      );
-
-      if (pickedTime != null) {
-        setState(() {
-          _registrationDeadline = DateTime(
-            picked.year,
-            picked.month,
-            picked.day,
-            pickedTime.hour,
-            pickedTime.minute,
-          );
-        });
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text('Edit Event Dates'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Event Date & Time:'),
-          InkWell(
-            onTap: _selectEventDate,
-            child: Container(
-              padding: EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    DateFormat('MMM dd, yyyy • hh:mm a').format(_eventDateTime),
-                  ),
-                  Icon(Icons.calendar_today, size: 16),
-                ],
-              ),
-            ),
-          ),
-          SizedBox(height: 16),
-          Text('Registration Deadline:'),
-          InkWell(
-            onTap: _selectRegistrationDeadline,
-            child: Container(
-              padding: EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    DateFormat(
-                      'MMM dd, yyyy • hh:mm a',
-                    ).format(_registrationDeadline),
-                  ),
-                  Icon(Icons.calendar_today, size: 16),
-                ],
-              ),
-            ),
-          ),
-          SizedBox(height: 8),
-          Text(
-            'Note: Registration deadline must be before event date',
-            style: TextStyle(fontSize: 12, color: Colors.grey),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            if (_registrationDeadline.isAfter(_eventDateTime)) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'Registration deadline must be before event date',
-                  ),
-                  backgroundColor: Colors.red,
-                ),
-              );
-              return;
-            }
-            Navigator.pop(context, {
-              'eventDateTime': _eventDateTime,
-              'registrationDeadline': _registrationDeadline,
-            });
-          },
-          child: Text('Save'),
-        ),
-      ],
-    );
-  }
-}
-
-DateTime? _parseDateTime(dynamic dateTimeStr) {
-  if (dateTimeStr == null || dateTimeStr is! String) return null;
-
-  try {
-    return DateTime.parse(dateTimeStr);
-  } catch (e) {
-    return null;
   }
 }
