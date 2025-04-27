@@ -288,6 +288,7 @@ class _EventPageState extends State<EventPage> {
           .set({
             'name': userDoc['name'],
             'regNo': userDoc['regNo'],
+            'email': userDoc['email'],
             'department': userDoc['department'],
             'phoneNumber': phoneNumber,
             'registeredAt': FieldValue.serverTimestamp(),

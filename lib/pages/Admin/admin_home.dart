@@ -431,7 +431,7 @@ class _AdminHomeState extends State<AdminHome> {
   final List<Widget> _pages = [
     const AdminDashboardPage(),
     const EventsPage(),
-    const participants(),
+    Participants(clubName: AdminHome.currentClubName),
     const history(),
   ];
 
@@ -493,7 +493,7 @@ class _AdminHomeState extends State<AdminHome> {
       case 1:
         return const EventsPage();
       case 2:
-        return const participants();
+        return Participants(clubName: AdminHome.currentClubName);
       case 3:
         return const history();
       default:
