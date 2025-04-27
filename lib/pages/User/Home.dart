@@ -107,16 +107,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       categorized[category] = [];
     }
 
-    // Add "Uncategorized" for any clubs outside predefined categories
-    categorized['Uncategorized'] = [];
-
     // Sort followed clubs into categories
     for (var club in _followedClubs) {
-      String category = club['category'] ?? 'Uncategorized';
-      if (!categorized.containsKey(category)) {
-        categorized[category] = [];
+      String category = club['category'] ?? '';
+      if (predefinedCategories.contains(category)) {
+        categorized[category]!.add(club);
       }
-      categorized[category]!.add(club);
     }
 
     // Remove empty categories
@@ -150,37 +146,35 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         for (var category in predefinedCategories) {
           categorizedClubs[category] = [];
         }
-        categorizedClubs['Uncategorized'] = []; // Add uncategorized category
 
         for (var doc in clubSnapshot.docs) {
           Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
-          String category = data['category'] ?? 'Uncategorized';
+          String category = data['category'] ?? '';
 
-          // Ensure followers is initialized
-          List<String> followers = [];
-          if (data.containsKey('followers')) {
-            followers = List<String>.from(data['followers']);
+          // Only include clubs with predefined categories
+          if (predefinedCategories.contains(category)) {
+            // Ensure followers is initialized
+            List<String> followers = [];
+            if (data.containsKey('followers')) {
+              followers = List<String>.from(data['followers']);
+            }
+
+            // Make sure memberCount matches followers array length
+            int memberCount = followers.length;
+
+            Map<String, dynamic> clubData = {
+              'id': doc.id,
+              'name': data['name'] ?? 'Unknown Club',
+              'description': data['description'] ?? 'No description available',
+              'image': data['imageUrl'] ?? 'assets/default_club.png',
+              'memberCount': memberCount,
+              'category': category,
+              'followers': followers, // Store followers array for easy checking
+            };
+
+            clubs.add(clubData);
+            categorizedClubs[category]!.add(clubData);
           }
-
-          // Make sure memberCount matches followers array length
-          int memberCount = followers.length;
-
-          Map<String, dynamic> clubData = {
-            'id': doc.id,
-            'name': data['name'] ?? 'Unknown Club',
-            'description': data['description'] ?? 'No description available',
-            'image': data['imageUrl'] ?? 'assets/default_club.png',
-            'memberCount': memberCount,
-            'category': category,
-            'followers': followers, // Store followers array for easy checking
-          };
-
-          clubs.add(clubData);
-
-          if (!categorizedClubs.containsKey(category)) {
-            categorizedClubs[category] = [];
-          }
-          categorizedClubs[category]!.add(clubData);
         }
 
         // Remove empty categories
@@ -476,7 +470,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             Icon(Icons.error_outline, size: 60, color: Colors.grey[400]),
             const SizedBox(height: 20),
             Text(
-              "No clubs available",
+              isFollowedSection
+                  ? "You're not following any clubs yet"
+                  : "No clubs available",
               style: GoogleFonts.roboto(fontSize: 18, color: Colors.grey[600]),
             ),
           ],
@@ -594,58 +590,38 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildFollowedClubsEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.group_add, size: 60, color: Colors.grey[400]),
-          const SizedBox(height: 20),
-          Text(
-            "You're not following any clubs yet",
-            style: GoogleFonts.roboto(fontSize: 18, color: Colors.grey[600]),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            "Explore clubs and tap 'Follow' to add them here",
-            style: GoogleFonts.roboto(fontSize: 14, color: Colors.grey[500]),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 20),
-          ElevatedButton(
-            onPressed: () {
-              // Switch to All Clubs tab
-              _tabController.animateTo(0);
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.orangeAccent,
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('Explore Clubs'),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildClubList(
     List<Map<String, dynamic>> clubs,
     bool isFollowedSection,
   ) {
     if (isFollowedSection && clubs.isEmpty) {
-      return _buildFollowedClubsEmptyState();
-    }
-
-    if (!isFollowedSection && clubs.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.error_outline, size: 60, color: Colors.grey[400]),
+            Icon(Icons.group_add, size: 60, color: Colors.grey[400]),
             const SizedBox(height: 20),
             Text(
-              "No clubs available",
+              "You're not following any clubs yet",
               style: GoogleFonts.roboto(fontSize: 18, color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              "Explore clubs and tap 'Follow' to add them here",
+              style: GoogleFonts.roboto(fontSize: 14, color: Colors.grey[500]),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () {
+                // Switch to All Clubs tab
+                _tabController.animateTo(0);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orangeAccent,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Explore Clubs'),
             ),
           ],
         ),
