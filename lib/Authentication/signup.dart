@@ -146,11 +146,15 @@ class _SignUpState extends State<SignUp> {
         'role': 'USER',
         'OdCount': 0,
         'FollowedClubs': [],
+        'participatedEventIds': [],
         'blockUntil': null,
         'createdAt': FieldValue.serverTimestamp(),
       });
 
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (context)=>HomePage()));
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => HomePage()),
+      );
     } catch (e) {
       _showMessage("Error", "Failed to complete signup. Try again.");
     } finally {
