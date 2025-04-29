@@ -286,8 +286,7 @@ class _EventsPageState extends State<EventsPage>
                                 'title': titleController.text,
                                 'description': descriptionController.text,
                                 'clubName': clubName,
-                                'clubId':
-                                    FirebaseAuth.instance.currentUser?.uid,
+                                'clubId': AdminHome.currentClubId,
                                 'location': locationController.text,
                                 'registrationDateTime':
                                     registrationDateTime.toIso8601String(),

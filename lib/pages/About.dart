@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:rit_club/Authentication/login.dart';
+import 'package:rit_club/pages/Admin/admin_home.dart';
 
 class About extends StatefulWidget {
   const About({super.key});
@@ -50,6 +51,7 @@ class _AboutState extends State<About> {
   }
 
   void _logout() async {
+    AdminHome.resetClubInfo();
     await _auth.signOut();
     Navigator.pushAndRemoveUntil(
       context,
@@ -296,17 +298,15 @@ class _AboutState extends State<About> {
                 ),
               ),
               const SizedBox(height: 8),
-              ...clubNames
-                  .map(
-                    (club) => Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2.0),
-                      child: Text(
-                        "• $club",
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                    ),
-                  )
-                  ,
+              ...clubNames.map(
+                (club) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2.0),
+                  child: Text(
+                    "• $club",
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ),
+              ),
             ],
           ),
         ),

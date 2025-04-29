@@ -106,7 +106,7 @@ class EventCard extends StatelessWidget {
   final int participantLimit;
 
   const EventCard({
-    Key? key,
+    super.key,
     required this.eventId,
     required this.eventName,
     required this.eventDate,
@@ -114,7 +114,7 @@ class EventCard extends StatelessWidget {
     required this.clubName,
     required this.participantCount,
     required this.participantLimit,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -224,11 +224,11 @@ class ParticipantDetailsPage extends StatefulWidget {
   final String clubName;
 
   const ParticipantDetailsPage({
-    Key? key,
+    super.key,
     required this.eventId,
     required this.eventName,
     required this.clubName,
-  }) : super(key: key);
+  });
 
   @override
   State<ParticipantDetailsPage> createState() => _ParticipantDetailsPageState();

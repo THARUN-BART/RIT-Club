@@ -21,7 +21,7 @@ class _EventPageState extends State<EventPage> {
   List<String> _followedClubNames = [];
   List<String> _participatedEventIds = []; // Track participated event IDs
   int _odCount = 0; // Track user's OD count
-  DateTime? _lastOdResetDate; // Track when OD count was last reset
+  DateTime? _lastOdResetDate;
   String _selectedFilter = "All";
   bool _isLoading = true;
   // Add a map to track user participation status for each event

@@ -12,6 +12,7 @@ import 'package:rit_club/pages/Admin/history.dart';
 import 'package:rit_club/pages/Admin/participants.dart';
 
 import '../../Authentication/login.dart';
+import 'Announcement.dart';
 
 class ClubCreationPage extends StatefulWidget {
   const ClubCreationPage({super.key});
@@ -176,7 +177,7 @@ class _ClubCreationPageState extends State<ClubCreationPage> {
             'imageUrl': imageUrl ?? '',
             'createdAt': FieldValue.serverTimestamp(),
             'createdBy': user.email,
-            'adminIds': [user.uid],
+            'adminIds': user.uid,
             'memberCount': 0,
             'followers': [], // Initialize empty followers array
           });
@@ -414,9 +415,13 @@ class _ClubCreationPageState extends State<ClubCreationPage> {
 class AdminHome extends StatefulWidget {
   const AdminHome({super.key});
 
-  // Add static variables to hold current club information
   static String currentClubId = '';
   static String currentClubName = '';
+
+  static void resetClubInfo() {
+    currentClubId = '';
+    currentClubName = '';
+  }
 
   @override
   State<AdminHome> createState() => _AdminHomeState();
@@ -428,10 +433,12 @@ class _AdminHomeState extends State<AdminHome> {
   bool _hasClubs = false;
   List<DocumentSnapshot> _userClubs = []; // Store all user clubs
 
+  // Update the list to include a new AnnouncementPage
   final List<Widget> _pages = [
     const AdminDashboardPage(),
     const EventsPage(),
     Participants(clubName: AdminHome.currentClubName),
+    const AnnouncementPage(), // New Announcement page
     const history(),
   ];
 
@@ -485,7 +492,7 @@ class _AdminHomeState extends State<AdminHome> {
     setState(() {});
   }
 
-  // Helper method to rebuild the current page
+  // Helper method to rebuild the current page - updated to include announcement page
   Widget _rebuildCurrentPage(int index) {
     switch (index) {
       case 0:
@@ -495,6 +502,8 @@ class _AdminHomeState extends State<AdminHome> {
       case 2:
         return Participants(clubName: AdminHome.currentClubName);
       case 3:
+        return const AnnouncementPage(); // New Announcement page
+      case 4:
         return const history();
       default:
         return const AdminDashboardPage();
@@ -584,30 +593,95 @@ class _AdminHomeState extends State<AdminHome> {
         ],
       ),
       body: _pages[_selectedIndex],
-      bottomNavigationBar: BottomNavigationBar(
-        type: BottomNavigationBarType.fixed,
-        currentIndex: _selectedIndex,
-        onTap: (index) {
+      bottomNavigationBar: BottomAppBar(
+        shape: const CircularNotchedRectangle(),
+        notchMargin: 8.0,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            // First two items
+            Expanded(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  IconButton(
+                    icon: Icon(
+                      Icons.dashboard,
+                      color: _selectedIndex == 0 ? Colors.orangeAccent : null,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _selectedIndex = 0;
+                        _pages[0] = _rebuildCurrentPage(0);
+                      });
+                    },
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      Icons.event,
+                      color: _selectedIndex == 1 ? Colors.orangeAccent : null,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _selectedIndex = 1;
+                        _pages[1] = _rebuildCurrentPage(1);
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+
+            // Empty space for the FAB
+            const SizedBox(width: 48),
+
+            // Last two items
+            Expanded(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  IconButton(
+                    icon: Icon(
+                      Icons.people,
+                      color: _selectedIndex == 2 ? Colors.orangeAccent : null,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _selectedIndex = 2;
+                        _pages[2] = _rebuildCurrentPage(2);
+                      });
+                    },
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      Icons.history,
+                      color: _selectedIndex == 4 ? Colors.orangeAccent : null,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _selectedIndex = 4;
+                        _pages[4] = _rebuildCurrentPage(4);
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor:
+            _selectedIndex == 3 ? Colors.orangeAccent : Colors.blue,
+        child: const Icon(Icons.add, color: Colors.white),
+        onPressed: () {
           setState(() {
-            _selectedIndex = index;
-            // Rebuild the page when switching tabs
-            _pages[index] = _rebuildCurrentPage(index);
+            _selectedIndex = 3;
+            _pages[3] = _rebuildCurrentPage(3);
           });
         },
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.dashboard),
-            label: 'Dashboard',
-          ),
-          BottomNavigationBarItem(icon: Icon(Icons.event), label: 'Events'),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.people),
-            label: 'Participants',
-          ),
-          BottomNavigationBarItem(icon: Icon(Icons.history), label: 'History'),
-        ],
-        selectedItemColor: Colors.orangeAccent,
       ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
     );
   }
 }
@@ -1181,6 +1255,13 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                   ),
                 ),
               ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          Card(
+            elevation: 4,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
             ),
           ),
           const SizedBox(height: 24),
