@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:rit_club/Authentication/login.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:rit_club/pages/About.dart';
+import 'package:rit_club/pages/User/ClubAnouncement.dart';
 import 'package:rit_club/pages/User/EventPage.dart';
 import 'package:rit_club/pages/User/status_page.dart';
 
@@ -574,11 +575,26 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       child: Text(isFollowing ? 'Unfollow' : 'Follow'),
                     ),
                     onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('View details for ${club['name']}'),
-                        ),
-                      );
+                      // If this is a followed club, navigate to the announcement page
+                      if (isFollowedSection) {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder:
+                                (context) => ClubAnnouncementPage(
+                                  clubId: club['id'],
+                                  clubName: club['name'],
+                                ),
+                          ),
+                        );
+                      } else {
+                        // For clubs in the All Clubs tab, just show a snackbar for now
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('View details for ${club['name']}'),
+                          ),
+                        );
+                      }
                     },
                   ),
                 );

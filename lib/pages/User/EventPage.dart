@@ -17,39 +17,37 @@ class _EventPageState extends State<EventPage> {
 
   List<DocumentSnapshot> _events = [];
   List<DocumentSnapshot> _filteredEvents = [];
-  List<DocumentSnapshot> _followedEvents = [];
-  List<String> _followedClubNames = [];
-  List<String> _participatedEventIds = []; // Track participated event IDs
-  int _odCount = 0; // Track user's OD count
+  List<String> _followedClubIds = [];
+  List<String> _participatedEventIds = [];
+  int _odCount = 0;
   DateTime? _lastOdResetDate;
-  String _selectedFilter = "All";
+  String _selectedFilter = "";
   bool _isLoading = true;
-  // Add a map to track user participation status for each event
   Map<String, bool> _participationStatus = {};
+
+  // Add map to store club names
+  Map<String, String> _clubNames = {};
 
   @override
   void initState() {
     super.initState();
     _fetchUserData().then((_) {
       _fetchEvents();
-      _checkOdReset(); // Check if OD count needs reset
+      _checkOdReset();
     });
   }
 
-  // New method to check if OD count needs to be reset (after 3 months)
   Future<void> _checkOdReset() async {
     if (_lastOdResetDate != null) {
       DateTime threeMonthsAgo = DateTime.now().subtract(
         const Duration(days: 90),
       );
       if (_lastOdResetDate!.isBefore(threeMonthsAgo)) {
-        // Reset OD count if it's been more than 3 months
         await _resetOdCount();
       }
     }
   }
 
-  // New method to reset OD count
   Future<void> _resetOdCount() async {
     User? currentUser = _auth.currentUser;
     if (currentUser != null) {
@@ -62,6 +60,59 @@ class _EventPageState extends State<EventPage> {
         _odCount = 0;
         _lastOdResetDate = DateTime.now();
       });
+    }
+  }
+
+  Future<void> _fetchUserData() async {
+    try {
+      User? currentUser = _auth.currentUser;
+      if (currentUser != null) {
+        DocumentSnapshot userDoc =
+            await _firestore.collection('users').doc(currentUser.uid).get();
+
+        if (userDoc.exists) {
+          // Get followed club IDs
+          List<String> followedClubIds = [];
+          var followedClubsData = userDoc.get('followedClubs');
+
+          if (followedClubsData is List) {
+            followedClubIds = List<String>.from(followedClubsData);
+          } else if (followedClubsData is Map) {
+            followedClubIds = List<String>.from(followedClubsData.keys);
+          }
+
+          // Get participated event IDs
+          List<String> participatedEventIds = [];
+          var participatedEventsData = userDoc.get('participatedEventIds');
+          if (participatedEventsData is List) {
+            participatedEventIds = List<String>.from(participatedEventsData);
+          }
+
+          // Get OD count data
+          int odCount = userDoc.get('odCount') ?? 0;
+          Timestamp? lastOdResetTimestamp = userDoc.get('lastOdResetDate');
+          DateTime? lastOdResetDate = lastOdResetTimestamp?.toDate();
+
+          // Fetch club names
+          Map<String, String> clubNames = {};
+          QuerySnapshot clubsSnapshot =
+              await _firestore.collection('clubs').get();
+          for (var doc in clubsSnapshot.docs) {
+            clubNames[doc.id] = doc['name'] as String;
+          }
+
+          setState(() {
+            _followedClubIds = followedClubIds;
+            _participatedEventIds = participatedEventIds;
+            _odCount = odCount;
+            _lastOdResetDate = lastOdResetDate;
+            _selectedFilter = "Following"; // Set default filter to Following
+            _clubNames = clubNames;
+          });
+        }
+      }
+    } catch (e) {
+      _showErrorSnackBar('Failed to load user data: $e');
     }
   }
 
@@ -79,55 +130,33 @@ class _EventPageState extends State<EventPage> {
 
       setState(() {
         _events = eventSnapshot.docs;
-
-        // Apply filter based on current selection
-        if (_selectedFilter == "All") {
-          _filteredEvents = _events;
-        } else if (_selectedFilter == "Following") {
-          _filteredEvents =
-              _events.where((event) {
-                String clubName = event['clubName'] as String;
-                return _followedClubNames.contains(clubName);
-              }).toList();
-        } else {
-          // Filter by specific club name
-          _filteredEvents =
-              _events
-                  .where((event) => event['clubName'] == _selectedFilter)
-                  .toList();
-        }
-
-        // Always populate followed events for the followed section
-        _followedEvents =
-            _events.where((event) {
-              String clubName = event['clubName'] as String;
-              return _followedClubNames.contains(clubName);
-            }).toList();
+        _applyFilters();
       });
 
-      // Check participation status for all events
       await _checkUserParticipation();
-
-      setState(() {
-        _isLoading = false;
-      });
     } catch (e) {
+      _showErrorSnackBar('Failed to load events: $e');
+    } finally {
       setState(() {
         _isLoading = false;
       });
-      _showErrorSnackBar('Failed to load events: $e');
     }
   }
 
-  // Modified method to check if the user has participated in each event
+  void _applyFilters() {
+    // Only show events from followed clubs by default
+    _filteredEvents =
+        _events.where((event) {
+          String clubId = event['clubId'] as String;
+          return _followedClubIds.contains(clubId);
+        }).toList();
+  }
+
   Future<void> _checkUserParticipation() async {
     User? currentUser = _auth.currentUser;
     if (currentUser == null) return;
 
-    // Initialize participation status map
     Map<String, bool> status = {};
-
-    // Check participation for each event
     for (var event in _events) {
       try {
         DocumentSnapshot participantDoc =
@@ -149,75 +178,6 @@ class _EventPageState extends State<EventPage> {
     });
   }
 
-  Future<void> _fetchUserData() async {
-    try {
-      User? currentUser = _auth.currentUser;
-      if (currentUser != null) {
-        DocumentSnapshot userDoc =
-            await _firestore.collection('users').doc(currentUser.uid).get();
-
-        if (userDoc.exists) {
-          // Make sure we're properly retrieving the followedClubNames field
-          var followedClubNamesData = userDoc.get('followedClubNames');
-
-          List<String> followedClubNamesList = [];
-
-          // Handle different data types returned from Firestore
-          if (followedClubNamesData is List) {
-            followedClubNamesList = List<String>.from(
-              followedClubNamesData.map((item) => item.toString()),
-            );
-          } else if (followedClubNamesData is Map) {
-            followedClubNamesList = List<String>.from(
-              followedClubNamesData.keys,
-            );
-          }
-
-          // Get participated event IDs
-          List<String> participatedEventIdsList = [];
-          var participatedEventsData = userDoc.get('participatedEventIds');
-          if (participatedEventsData != null) {
-            if (participatedEventsData is List) {
-              participatedEventIdsList = List<String>.from(
-                participatedEventsData.map((item) => item.toString()),
-              );
-            } else if (participatedEventsData is Map) {
-              participatedEventIdsList = List<String>.from(
-                participatedEventsData.keys,
-              );
-            }
-          }
-
-          // Get OD count
-          int odCount = 0;
-          var odCountData = userDoc.get('odCount');
-          if (odCountData != null) {
-            odCount = odCountData is int ? odCountData : 0;
-          }
-
-          // Get last OD reset date
-          DateTime? lastOdResetDate;
-          var lastOdResetData = userDoc.get('lastOdResetDate');
-          if (lastOdResetData != null && lastOdResetData is Timestamp) {
-            lastOdResetDate = lastOdResetData.toDate();
-          }
-
-          setState(() {
-            _followedClubNames = followedClubNamesList;
-            _participatedEventIds = participatedEventIdsList;
-            _odCount = odCount;
-            _lastOdResetDate = lastOdResetDate;
-          });
-        }
-      }
-    } catch (e) {
-      _showErrorSnackBar('Failed to load user data: $e');
-    }
-  }
-
-  // The important part is in the _registerForEvent method where we
-  // update the user document with the event ID
-
   Future<void> _registerForEvent(DocumentSnapshot event) async {
     try {
       User? currentUser = _auth.currentUser;
@@ -226,7 +186,6 @@ class _EventPageState extends State<EventPage> {
         return;
       }
 
-      // Check if registration deadline has passed
       DateTime? registrationDeadline = _parseDateTime(
         event['registrationDateTime'],
       );
@@ -236,7 +195,6 @@ class _EventPageState extends State<EventPage> {
         return;
       }
 
-      // Get user details from database
       DocumentSnapshot userDoc =
           await _firestore.collection('users').doc(currentUser.uid).get();
 
@@ -245,7 +203,6 @@ class _EventPageState extends State<EventPage> {
         return;
       }
 
-      // Check if user already registered
       DocumentSnapshot existingRegistration =
           await _firestore
               .collection('events')
@@ -259,13 +216,7 @@ class _EventPageState extends State<EventPage> {
         return;
       }
 
-      // Check if user has reached OD limit (3)
-      int currentOdCount = 0;
-      if (userDoc.data() is Map<String, dynamic>) {
-        Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
-        currentOdCount = userData['odCount'] ?? 0;
-      }
-
+      int currentOdCount = userDoc.get('odCount') ?? 0;
       if (currentOdCount >= 3) {
         _showErrorSnackBar(
           'You have reached your OD limit (3 events). Please wait for reset after 3 months.',
@@ -273,13 +224,9 @@ class _EventPageState extends State<EventPage> {
         return;
       }
 
-      // Show phone number input dialog
       String? phoneNumber = await _showPhoneNumberDialog();
-      if (phoneNumber == null) {
-        return; // User cancelled the dialog
-      }
+      if (phoneNumber == null) return;
 
-      // Add registration to participants subcollection of the event
       await _firestore
           .collection('events')
           .doc(event.id)
@@ -294,51 +241,30 @@ class _EventPageState extends State<EventPage> {
             'registeredAt': FieldValue.serverTimestamp(),
           });
 
-      // Update event participants count
       await _firestore.collection('events').doc(event.id).update({
         'participants': FieldValue.increment(1),
       });
 
-      // Get existing participated events from user document
-      List<String> participatedEventIds = [];
-      if (userDoc.data() is Map<String, dynamic>) {
-        Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
-        if (userData['participatedEventIds'] is List) {
-          participatedEventIds = List<String>.from(
-            userData['participatedEventIds'],
-          );
-        }
-      }
-
-      // Add new event ID to the list if not already there
+      List<String> participatedEventIds = List<String>.from(
+        userDoc.get('participatedEventIds') ?? [],
+      );
       if (!participatedEventIds.contains(event.id)) {
         participatedEventIds.add(event.id);
       }
 
-      // Update OD count
       int newOdCount = currentOdCount + 1;
-
-      // Get current time for lastOdResetDate if it doesn't exist
       DateTime now = DateTime.now();
-      Timestamp? lastOdResetDate;
-      if (userDoc.data() is Map<String, dynamic>) {
-        Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
-        if (userData['lastOdResetDate'] is Timestamp) {
-          lastOdResetDate = userData['lastOdResetDate'] as Timestamp;
-        }
-      }
+      Timestamp? lastOdResetDate = userDoc.get('lastOdResetDate');
 
-      // Update user document with new event ID and OD count
       await _firestore.collection('users').doc(currentUser.uid).update({
         'participatedEventIds': participatedEventIds,
         'odCount': newOdCount,
         'lastOdResetDate': lastOdResetDate ?? Timestamp.fromDate(now),
       });
 
-      // Update local state
       setState(() {
         _participationStatus[event.id] = true;
-        if (_participatedEventIds.contains(event.id) == false) {
+        if (!_participatedEventIds.contains(event.id)) {
           _participatedEventIds.add(event.id);
         }
         _odCount = newOdCount;
@@ -379,7 +305,6 @@ class _EventPageState extends State<EventPage> {
               ElevatedButton(
                 onPressed: () {
                   String phoneNumber = phoneController.text.trim();
-
                   if (regExp.hasMatch(phoneNumber)) {
                     Navigator.pop(context, phoneNumber);
                   } else {
@@ -403,23 +328,15 @@ class _EventPageState extends State<EventPage> {
   void _filterEvents(String filter) {
     setState(() {
       _selectedFilter = filter;
-
-      if (filter == "All") {
-        _filteredEvents = _events;
-      } else if (filter == "Following") {
+      if (filter == "Following") {
         _filteredEvents =
             _events.where((event) {
-              try {
-                String clubName = event['clubName'] as String;
-                return _followedClubNames.contains(clubName);
-              } catch (e) {
-                return false;
-              }
+              String clubId = event['clubId'] as String;
+              return _followedClubIds.contains(clubId);
             }).toList();
       } else {
-        // Filter by specific club name
         _filteredEvents =
-            _events.where((event) => event['clubName'] == filter).toList();
+            _events.where((event) => event['clubId'] == filter).toList();
       }
     });
   }
@@ -440,39 +357,29 @@ class _EventPageState extends State<EventPage> {
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 16),
+
+                  // Add "All Following Events" option
                   ListTile(
-                    title: const Text('All Events'),
-                    leading: Radio(
-                      value: "All",
-                      groupValue: _selectedFilter,
-                      onChanged: (value) {
-                        setModalState(() {
-                          _selectedFilter = value as String;
-                        });
-                        Navigator.pop(context);
-                        _filterEvents(value as String);
-                      },
+                    title: const Text('All Following Events'),
+                    subtitle: const Text(
+                      'Show events from all clubs you follow',
+                      style: TextStyle(color: Colors.green),
                     ),
-                  ),
-                  ListTile(
-                    title: const Text('Followed Clubs Only'),
                     leading: Radio(
                       value: "Following",
                       groupValue: _selectedFilter,
                       onChanged: (value) {
-                        setModalState(() {
-                          _selectedFilter = value as String;
-                        });
+                        setModalState(() => _selectedFilter = value as String);
                         Navigator.pop(context);
                         _filterEvents(value as String);
                       },
                     ),
                   ),
+
                   const Divider(),
                   const Text(
                     'Filter by Specific Club',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                    textAlign: TextAlign.start,
                   ),
                   const SizedBox(height: 8),
                   Expanded(
@@ -492,33 +399,38 @@ class _EventPageState extends State<EventPage> {
                           );
                         }
 
+                        // Filter to only show followed clubs
+                        final followedClubs =
+                            snapshot.data!.docs.where((doc) {
+                              return _followedClubIds.contains(doc.id);
+                            }).toList();
+
+                        if (followedClubs.isEmpty) {
+                          return const Center(
+                            child: Text('You are not following any clubs'),
+                          );
+                        }
+
                         return ListView.builder(
                           shrinkWrap: true,
-                          itemCount: snapshot.data!.docs.length,
+                          itemCount: followedClubs.length,
                           itemBuilder: (context, index) {
-                            String clubName =
-                                snapshot.data!.docs[index]['name'];
-                            String clubId = snapshot.data!.docs[index].id;
-                            bool isFollowed = _followedClubNames.contains(
-                              clubName,
-                            );
+                            String clubId = followedClubs[index].id;
+                            String clubName = followedClubs[index]['name'];
 
                             return ListTile(
                               title: Text(clubName),
-                              subtitle:
-                                  isFollowed
-                                      ? const Text(
-                                        'Following',
-                                        style: TextStyle(color: Colors.green),
-                                      )
-                                      : null,
+                              subtitle: const Text(
+                                'Following',
+                                style: TextStyle(color: Colors.green),
+                              ),
                               leading: Radio(
-                                value: clubName,
+                                value: clubId,
                                 groupValue: _selectedFilter,
                                 onChanged: (value) {
-                                  setModalState(() {
-                                    _selectedFilter = value as String;
-                                  });
+                                  setModalState(
+                                    () => _selectedFilter = value as String,
+                                  );
                                   Navigator.pop(context);
                                   _filterEvents(value as String);
                                 },
@@ -552,12 +464,16 @@ class _EventPageState extends State<EventPage> {
 
   DateTime? _parseDateTime(dynamic dateTimeStr) {
     if (dateTimeStr == null || dateTimeStr is! String) return null;
-
     try {
       return DateTime.parse(dateTimeStr);
     } catch (e) {
       return null;
     }
+  }
+
+  // Get the club name based on club ID
+  String _getClubName(String clubId) {
+    return _clubNames[clubId] ?? clubId;
   }
 
   @override
@@ -574,7 +490,6 @@ class _EventPageState extends State<EventPage> {
             icon: const Icon(Icons.filter_list),
             onPressed: _showFilterBottomSheet,
           ),
-          // Add OD count indicator to app bar
           Center(
             child: Container(
               margin: const EdgeInsets.only(right: 16),
@@ -601,79 +516,13 @@ class _EventPageState extends State<EventPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Followed Clubs Events Section
-                    if (_followedEvents.isNotEmpty) ...[
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                        child: Text(
-                          "Events from Clubs You Follow",
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.orangeAccent[700],
-                          ),
-                        ),
-                      ),
-                      Container(
-                        height: 260,
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: ListView.builder(
-                          scrollDirection: Axis.horizontal,
-                          itemCount: _followedEvents.length,
-                          itemBuilder: (context, index) {
-                            DocumentSnapshot event = _followedEvents[index];
-                            return SizedBox(
-                              width: MediaQuery.of(context).size.width * 0.85,
-                              child: EventCard(
-                                event: event,
-                                onRegister: () => _registerForEvent(event),
-                                // Pass participation status to EventCard
-                                hasParticipated:
-                                    _participationStatus[event.id] ?? false,
-                                odCount: _odCount,
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                      const Divider(thickness: 1, height: 32),
-                    ] else if (_followedClubNames.isNotEmpty) ...[
-                      Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.grey[100],
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.info_outline,
-                                color: Colors.grey,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  "The clubs you follow don't have any upcoming events",
-                                  style: TextStyle(color: Colors.grey[700]),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-
-                    // All/Filtered Events Section
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                       child: Text(
-                        _selectedFilter == "All"
-                            ? "All Events"
-                            : _selectedFilter == "Following"
+                        _selectedFilter.isEmpty ||
+                                _selectedFilter == "Following"
                             ? "Events from Clubs You Follow"
-                            : "Events from $_selectedFilter",
+                            : "Events from ${_getClubName(_selectedFilter)}",
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
@@ -697,12 +546,10 @@ class _EventPageState extends State<EventPage> {
                                   'No events available',
                                   style: TextStyle(fontSize: 18),
                                 ),
-                                if (_selectedFilter == "Following")
-                                  Text(
-                                    _followedClubNames.isEmpty
-                                        ? 'You are not following any clubs'
-                                        : 'Followed clubs have no upcoming events',
-                                    style: const TextStyle(color: Colors.grey),
+                                if (_followedClubIds.isEmpty)
+                                  const Text(
+                                    'You are not following any clubs',
+                                    style: TextStyle(color: Colors.grey),
                                   ),
                               ],
                             ),
@@ -718,7 +565,6 @@ class _EventPageState extends State<EventPage> {
                             return EventCard(
                               event: event,
                               onRegister: () => _registerForEvent(event),
-                              // Pass participation status to EventCard
                               hasParticipated:
                                   _participationStatus[event.id] ?? false,
                               odCount: _odCount,
@@ -735,9 +581,7 @@ class _EventPageState extends State<EventPage> {
 class EventCard extends StatelessWidget {
   final DocumentSnapshot event;
   final VoidCallback onRegister;
-  // Add a new property to track participation status
   final bool hasParticipated;
-  // Add a new property to display OD count
   final int odCount;
 
   const EventCard({
@@ -750,7 +594,6 @@ class EventCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Check if event has reached participant limit
     int participants = event['participants'] ?? 0;
     int participantLimit = event['participantLimit'] ?? 0;
     bool isFull = participantLimit > 0 && participants >= participantLimit;
@@ -759,13 +602,9 @@ class EventCard extends StatelessWidget {
     DateTime? registrationDeadline = _parseDateTime(
       event['registrationDateTime'],
     );
-
-    // Check if registration deadline has passed
     bool isRegistrationClosed =
         registrationDeadline != null &&
         registrationDeadline.isBefore(DateTime.now());
-
-    // Check if user has reached OD limit
     bool hasReachedOdLimit = odCount >= 3;
 
     return Card(
@@ -910,7 +749,6 @@ class EventCard extends StatelessWidget {
                         color: isFull ? Colors.red : Colors.blue,
                       ),
                     ),
-                    // Show different button based on participation status
                     hasParticipated
                         ? Container(
                           padding: const EdgeInsets.symmetric(
@@ -973,7 +811,6 @@ class EventCard extends StatelessWidget {
 
   DateTime? _parseDateTime(dynamic dateTimeStr) {
     if (dateTimeStr == null || dateTimeStr is! String) return null;
-
     try {
       return DateTime.parse(dateTimeStr);
     } catch (e) {

@@ -8,7 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:rit_club/pages/About.dart';
 import 'package:rit_club/pages/Admin/admin_events.dart';
-import 'package:rit_club/pages/Admin/history.dart';
+import 'package:rit_club/pages/Admin/FeedBack.dart';
 import 'package:rit_club/pages/Admin/participants.dart';
 
 import '../../Authentication/login.dart';
@@ -439,7 +439,7 @@ class _AdminHomeState extends State<AdminHome> {
     const EventsPage(),
     Participants(clubName: AdminHome.currentClubName),
     const AnnouncementPage(), // New Announcement page
-    const history(),
+    const feedback(),
   ];
 
   @override
@@ -502,9 +502,9 @@ class _AdminHomeState extends State<AdminHome> {
       case 2:
         return Participants(clubName: AdminHome.currentClubName);
       case 3:
-        return const AnnouncementPage(); // New Announcement page
+        return const AnnouncementPage();
       case 4:
-        return const history();
+        return const feedback();
       default:
         return const AdminDashboardPage();
     }
@@ -654,7 +654,7 @@ class _AdminHomeState extends State<AdminHome> {
                   ),
                   IconButton(
                     icon: Icon(
-                      Icons.history,
+                      Icons.feedback,
                       color: _selectedIndex == 4 ? Colors.orangeAccent : null,
                     ),
                     onPressed: () {

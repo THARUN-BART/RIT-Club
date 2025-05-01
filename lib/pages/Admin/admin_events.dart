@@ -490,25 +490,24 @@ class _EventsPageState extends State<EventsPage>
   Widget _buildEventsList(String status) {
     Query eventsQuery;
     DateTime now = DateTime.now();
-    String? currentUserId = FirebaseAuth.instance.currentUser?.uid;
 
-    if (currentUserId != null) {
+    if (AdminHome.currentClubId != null) {
       if (status == 'cancelled') {
         eventsQuery = FirebaseFirestore.instance
             .collection('events')
-            .where('clubId', isEqualTo: currentUserId)
+            .where('clubId', isEqualTo: AdminHome.currentClubId)
             .where('status', isEqualTo: 'cancelled')
             .orderBy('eventDateTime', descending: true);
       } else if (status == 'past') {
         eventsQuery = FirebaseFirestore.instance
             .collection('events')
-            .where('clubId', isEqualTo: currentUserId)
+            .where('clubId', isEqualTo: AdminHome.currentClubId)
             .where('status', isEqualTo: 'active')
             .orderBy('eventDateTime', descending: true);
       } else {
         eventsQuery = FirebaseFirestore.instance
             .collection('events')
-            .where('clubId', isEqualTo: currentUserId)
+            .where('clubId', isEqualTo: AdminHome.currentClubId)
             .where('status', isEqualTo: 'active')
             .orderBy('eventDateTime');
       }
