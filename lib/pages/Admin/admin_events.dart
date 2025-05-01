@@ -538,13 +538,11 @@ class _EventsPageState extends State<EventsPage>
                 if (event['eventDateTime'] == null) return false;
                 try {
                   final eventDate = DateTime.parse(event['eventDateTime']);
-                  // Create a date that represents the end of the event day (next day at midnight)
                   final endOfEventDay = DateTime(
                     eventDate.year,
                     eventDate.month,
                     eventDate.day + 1,
                   );
-                  // Event is active if today is before or equal to the event's end day
                   return now.isBefore(endOfEventDay);
                 } catch (e) {
                   return false;

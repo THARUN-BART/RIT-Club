@@ -5,7 +5,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:http/http.dart' as http;
 import 'dart:io';
 import 'package:open_file/open_file.dart';
 import 'package:intl/intl.dart';
@@ -25,6 +24,7 @@ class _StatusPageState extends State<StatusPage>
   List<String> _participatedEventIds = [];
   Stream<List<DocumentSnapshot>>? _activeEventsStream;
   Stream<List<DocumentSnapshot>>? _pastEventsStream;
+  Stream<List<DocumentSnapshot>>? _cancelledEventsStream;
   bool _isLoading = true;
   String? _currentUserName;
   Map<String, bool> _letterGenerationStatus = {};
@@ -32,9 +32,35 @@ class _StatusPageState extends State<StatusPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this); // Updated to 3 tabs
     _fetchUserData();
     _checkRegistrationEndDates();
+    _ensureODCountField(); // Ensure OD count field exists
+  }
+
+  // Make sure the odCount field exists in the user document
+  Future<void> _ensureODCountField() async {
+    final userId = _auth.currentUser?.uid;
+    if (userId == null) return;
+
+    try {
+      final userRef = _firestore.collection('users').doc(userId);
+      final userDoc = await userRef.get();
+
+      if (userDoc.exists) {
+        final userData = userDoc.data();
+        // If odCount doesn't exist, initialize it
+        if (!userData!.containsKey('odCount')) {
+          await userRef.update({'odCount': 0});
+        }
+        // If processedCancelledEvents doesn't exist, initialize it
+        if (!userData.containsKey('processedCancelledEvents')) {
+          await userRef.update({'processedCancelledEvents': []});
+        }
+      }
+    } catch (e) {
+      debugPrint('Error ensuring OD count field: $e');
+    }
   }
 
   Future<void> _fetchUserData() async {
@@ -50,6 +76,7 @@ class _StatusPageState extends State<StatusPage>
             _currentUserName = userDoc.data()?['name'] ?? 'User';
             _activeEventsStream = _getEventsByStatus('active');
             _pastEventsStream = _getEventsByStatus('past');
+            _cancelledEventsStream = _getEventsByStatus('cancelled');
             _checkExistingLetters();
             _isLoading = false;
           });
@@ -284,9 +311,82 @@ class _StatusPageState extends State<StatusPage>
         .map((snapshot) => snapshot.docs);
   }
 
+  // New method to handle OD count reduction for cancelled events
+  Future<void> _decrementODCount(String eventId) async {
+    try {
+      final userId = _auth.currentUser?.uid;
+      if (userId == null) return;
+
+      // Get current OD count
+      final DocumentReference userRef = _firestore
+          .collection('users')
+          .doc(userId);
+
+      // Use a transaction to ensure data consistency
+      await _firestore
+          .runTransaction((transaction) async {
+            DocumentSnapshot userDoc = await transaction.get(userRef);
+
+            if (!userDoc.exists) return null;
+
+            // Get current OD count and processed events
+            final Map<String, dynamic> userData =
+                userDoc.data() as Map<String, dynamic>;
+            final int currentODCount = userData['odCount'] ?? 0;
+            final List<String> processedCancelledEvents = List<String>.from(
+              userData['processedCancelledEvents'] ?? [],
+            );
+
+            // If we've already processed this cancelled event, don't do anything
+            if (processedCancelledEvents.contains(eventId)) {
+              return null;
+            }
+
+            // Calculate new OD count (ensure it doesn't go below 0)
+            final int newODCount = currentODCount > 0 ? currentODCount - 1 : 0;
+
+            // Add this event to the processed list
+            processedCancelledEvents.add(eventId);
+
+            // Update user document with new OD count and processed events list
+            transaction.update(userRef, {
+              'odCount': newODCount,
+              'processedCancelledEvents': processedCancelledEvents,
+            });
+
+            return newODCount;
+          })
+          .then((newCount) {
+            // Show notification to user about OD reduction if count was updated
+            if (newCount != null && mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'OD count reduced by 1 due to cancelled event (now: $newCount)',
+                  ),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
+          });
+    } catch (e) {
+      debugPrint('Error decrementing OD count: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update OD count: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   Widget _buildEventCard(DocumentSnapshot event) {
     final data = event.data() as Map<String, dynamic>;
-    final isActive = data['status']?.toString().toLowerCase() == 'active';
+    final status = data['status']?.toString().toLowerCase() ?? '';
+    final isActive = status == 'active';
+    final isCancelled = status == 'cancelled';
     final hasRegistrationEndDate = data['registrationEndDate'] != null;
     final registrationEndDate =
         hasRegistrationEndDate
@@ -296,6 +396,14 @@ class _StatusPageState extends State<StatusPage>
         registrationEndDate != null &&
         DateTime.now().isAfter(registrationEndDate);
     final hasLetter = _letterGenerationStatus[event.id] == true;
+
+    // Process cancelled event to reduce OD count
+    if (isCancelled) {
+      // Add a button to manually trigger OD count reduction for better user control
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _decrementODCount(event.id);
+      });
+    }
 
     return Card(
       elevation: 2,
@@ -323,13 +431,13 @@ class _StatusPageState extends State<StatusPage>
                     vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color: isActive ? Colors.green[50] : Colors.grey[200],
+                    color: _getStatusColor(status),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    isActive ? 'ACTIVE' : 'PAST',
+                    status.toUpperCase(),
                     style: TextStyle(
-                      color: isActive ? Colors.green : Colors.grey,
+                      color: _getStatusTextColor(status),
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -398,7 +506,7 @@ class _StatusPageState extends State<StatusPage>
               ),
 
             // Display letter button if the registration has ended or letter exists
-            if (isRegistrationEnded || hasLetter)
+            if ((isRegistrationEnded || hasLetter) && !isCancelled)
               Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: ElevatedButton.icon(
@@ -418,10 +526,80 @@ class _StatusPageState extends State<StatusPage>
                   ),
                 ),
               ),
+
+            // Display notification about OD count reduction for cancelled events
+            if (isCancelled)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Column(
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.red[50],
+                        border: Border.all(color: Colors.red[200]!),
+                        borderRadius: BorderRadius.circular(5),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.info_outline, color: Colors.red),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'This event has been cancelled. Your OD count will be reduced by 1.',
+                              style: TextStyle(color: Colors.red),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    ElevatedButton.icon(
+                      onPressed: () => _decrementODCount(event.id),
+                      icon: const Icon(Icons.update),
+                      label: const Text('Update OD Count'),
+                      style: ElevatedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        backgroundColor: Colors.red,
+                        minimumSize: const Size(double.infinity, 40),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
     );
+  }
+
+  // Helper method to get status color
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'active':
+        return Colors.green[50]!;
+      case 'cancelled':
+        return Colors.red[50]!;
+      case 'past':
+        return Colors.grey[200]!;
+      default:
+        return Colors.grey[200]!;
+    }
+  }
+
+  // Helper method to get status text color
+  Color _getStatusTextColor(String status) {
+    switch (status) {
+      case 'active':
+        return Colors.green;
+      case 'cancelled':
+        return Colors.red;
+      case 'past':
+        return Colors.grey;
+      default:
+        return Colors.grey;
+    }
   }
 
   Future<void> _viewEventLetter(String eventId, String eventName) async {
@@ -542,8 +720,52 @@ class _StatusPageState extends State<StatusPage>
           labelColor: Colors.orangeAccent,
           indicatorColor: Colors.orangeAccent,
           unselectedLabelColor: Colors.grey,
-          tabs: const [Tab(text: 'Active Events'), Tab(text: 'Past Events')],
+          tabs: const [
+            Tab(text: 'Active Events'),
+            Tab(text: 'Past Events'),
+            Tab(text: 'Cancelled Events'),
+          ],
         ),
+        actions: [
+          // Add a button to show current OD count
+          StreamBuilder<DocumentSnapshot>(
+            stream:
+                _firestore
+                    .collection('users')
+                    .doc(_auth.currentUser?.uid)
+                    .snapshots(),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return const SizedBox.shrink();
+              }
+
+              final userData = snapshot.data?.data() as Map<String, dynamic>?;
+              final odCount = userData?['odCount'] ?? 0;
+
+              return Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
+                margin: const EdgeInsets.only(right: 16),
+                decoration: BoxDecoration(
+                  color: Colors.orangeAccent.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.assignment, size: 18),
+                    const SizedBox(width: 4),
+                    Text(
+                      'OD: $odCount',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body:
           _isLoading
@@ -555,6 +777,7 @@ class _StatusPageState extends State<StatusPage>
                 children: [
                   _buildEventList(_activeEventsStream ?? Stream.value([])),
                   _buildEventList(_pastEventsStream ?? Stream.value([])),
+                  _buildEventList(_cancelledEventsStream ?? Stream.value([])),
                 ],
               ),
     );
