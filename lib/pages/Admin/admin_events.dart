@@ -538,12 +538,8 @@ class _EventsPageState extends State<EventsPage>
                 if (event['eventDateTime'] == null) return false;
                 try {
                   final eventDate = DateTime.parse(event['eventDateTime']);
-                  final endOfEventDay = DateTime(
-                    eventDate.year,
-                    eventDate.month,
-                    eventDate.day + 1,
-                  );
-                  return now.isBefore(endOfEventDay);
+                  // Event is active if current time is before event time + 2 hours
+                  return now.isBefore(eventDate.add(const Duration(hours: 2)));
                 } catch (e) {
                   return false;
                 }
@@ -555,15 +551,8 @@ class _EventsPageState extends State<EventsPage>
                 if (event['eventDateTime'] == null) return false;
                 try {
                   final eventDate = DateTime.parse(event['eventDateTime']);
-                  // Create a date that represents the end of the event day (next day at midnight)
-                  final endOfEventDay = DateTime(
-                    eventDate.year,
-                    eventDate.month,
-                    eventDate.day + 1,
-                  );
-                  // Event is past if today is after the event's end day
-                  return now.isAfter(endOfEventDay) ||
-                      now.isAtSameMomentAs(endOfEventDay);
+                  // Event is past if current time is after event time + 2 hours
+                  return now.isAfter(eventDate.add(const Duration(hours: 2)));
                 } catch (e) {
                   return false;
                 }
@@ -618,15 +607,11 @@ class _EventsPageState extends State<EventsPage>
 
             final isCancelled = event['status'] == 'cancelled';
 
-            // Check if the event is past (after midnight of the event day)
+            // Check if the event is past (after event time + 2 hours)
             final isPast =
                 eventDateTime != null
                     ? DateTime.now().isAfter(
-                      DateTime(
-                        eventDateTime.year,
-                        eventDateTime.month,
-                        eventDateTime.day + 1,
-                      ),
+                      eventDateTime.add(const Duration(hours: 2)),
                     )
                     : false;
 

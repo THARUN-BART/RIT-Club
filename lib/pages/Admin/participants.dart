@@ -236,6 +236,10 @@ class ParticipantDetailsPage extends StatefulWidget {
 
 class _ParticipantDetailsPageState extends State<ParticipantDetailsPage> {
   String searchQuery = '';
+  bool isLoading = false;
+
+  // Available attendance options
+  final List<String> attendanceOptions = ['Present', 'Absent'];
 
   @override
   Widget build(BuildContext context) {
@@ -337,172 +341,371 @@ class _ParticipantDetailsPageState extends State<ParticipantDetailsPage> {
             ),
           ),
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream:
-                  FirebaseFirestore.instance
-                      .collection('events')
-                      .doc(widget.eventId)
-                      .collection('participants')
-                      .snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: CircularProgressIndicator(
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        Colors.orangeAccent,
-                      ),
-                    ),
-                  );
-                }
-
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.people_outline,
-                          size: 60,
-                          color: Colors.grey[400],
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          "No participants yet",
-                          style: GoogleFonts.poppins(
-                            fontSize: 18,
-                            color: Colors.grey[600],
+            child: Stack(
+              children: [
+                StreamBuilder<QuerySnapshot>(
+                  stream:
+                      FirebaseFirestore.instance
+                          .collection('events')
+                          .doc(widget.eventId)
+                          .collection('participants')
+                          .snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
+                        child: CircularProgressIndicator(
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.orangeAccent,
                           ),
                         ),
-                      ],
-                    ),
-                  );
-                }
+                      );
+                    }
 
-                final participants = snapshot.data!.docs;
-
-                // Filter participants by registration number
-                final filteredParticipants =
-                    searchQuery.isEmpty
-                        ? participants
-                        : participants.where((participant) {
-                          final participantData =
-                              participant.data() as Map<String, dynamic>;
-                          final regNo =
-                              participantData['regNo'] as String? ?? '';
-                          return regNo.toLowerCase().contains(
-                            searchQuery.toLowerCase(),
-                          );
-                        }).toList();
-
-                if (filteredParticipants.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.search_off,
-                          size: 60,
-                          color: Colors.grey[400],
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          "No matching registration numbers",
-                          style: GoogleFonts.poppins(
-                            fontSize: 18,
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-
-                return ListView.builder(
-                  itemCount: filteredParticipants.length,
-                  itemBuilder: (context, index) {
-                    final participantData =
-                        filteredParticipants[index].data()
-                            as Map<String, dynamic>;
-                    final userId = filteredParticipants[index].id;
-
-                    return Card(
-                      margin: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 4,
-                      ),
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: Colors.orangeAccent.withOpacity(0.2),
-                          child: Text(
-                            (participantData['name'] as String?)
-                                    ?.substring(0, 1)
-                                    .toUpperCase() ??
-                                'U',
-                            style: const TextStyle(
-                              color: Colors.orangeAccent,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        title: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                    if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                      return Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text(
-                              participantData['name'] ?? "Unknown User",
-                              style: GoogleFonts.poppins(
-                                fontWeight: FontWeight.w500,
-                              ),
+                            Icon(
+                              Icons.people_outline,
+                              size: 60,
+                              color: Colors.grey[400],
                             ),
+                            const SizedBox(height: 16),
                             Text(
-                              "ID: $userId",
+                              "No participants yet",
                               style: GoogleFonts.poppins(
-                                fontSize: 12,
-                                color: Colors.grey,
+                                fontSize: 18,
+                                color: Colors.grey[600],
                               ),
                             ),
                           ],
                         ),
-                        subtitle: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                      );
+                    }
+
+                    final participants = snapshot.data!.docs;
+
+                    // Filter participants by registration number
+                    final filteredParticipants =
+                        searchQuery.isEmpty
+                            ? participants
+                            : participants.where((participant) {
+                              final participantData =
+                                  participant.data() as Map<String, dynamic>;
+                              final regNo =
+                                  participantData['regNo'] as String? ?? '';
+                              return regNo.toLowerCase().contains(
+                                searchQuery.toLowerCase(),
+                              );
+                            }).toList();
+
+                    if (filteredParticipants.isEmpty) {
+                      return Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text(participantData['email'] ?? "No email"),
-                            if (participantData['regNo'] != null)
-                              RichText(
-                                text: TextSpan(
-                                  children: _highlightRegNo(
-                                    "Reg No: ${participantData['regNo']}",
-                                    searchQuery,
+                            Icon(
+                              Icons.search_off,
+                              size: 60,
+                              color: Colors.grey[400],
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              "No matching registration numbers",
+                              style: GoogleFonts.poppins(
+                                fontSize: 18,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+
+                    return ListView.builder(
+                      itemCount: filteredParticipants.length,
+                      itemBuilder: (context, index) {
+                        final participantData =
+                            filteredParticipants[index].data()
+                                as Map<String, dynamic>;
+                        final participantId = filteredParticipants[index].id;
+                        final attendance =
+                            participantData['Attendance'] as String? ??
+                            'Not Marked';
+
+                        return Card(
+                          margin: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 4,
+                          ),
+                          child: ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: Colors.orangeAccent.withOpacity(
+                                0.2,
+                              ),
+                              child: Text(
+                                (participantData['name'] as String?)
+                                        ?.substring(0, 1)
+                                        .toUpperCase() ??
+                                    'U',
+                                style: const TextStyle(
+                                  color: Colors.orangeAccent,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            title: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  participantData['name'] ?? "Unknown User",
+                                  style: GoogleFonts.poppins(
+                                    fontWeight: FontWeight.w500,
                                   ),
                                 ),
-                              ),
-                            if (participantData['department'] != null)
-                              Text(
-                                "Department: ${participantData['department']}",
-                              ),
-                            if (participantData['phoneNumber'] != null)
-                              Text("Phone: ${participantData['phoneNumber']}"),
-                            if (participantData['registeredAt'] != null)
-                              Text(
-                                "Registered: ${_formatTimestamp(participantData['registeredAt'])}",
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  fontStyle: FontStyle.italic,
-                                  color: Colors.grey[600],
+                                Text(
+                                  "ID: $participantId",
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 12,
+                                    color: Colors.grey,
+                                  ),
                                 ),
-                              ),
-                          ],
-                        ),
-                        isThreeLine: true,
-                      ),
+                              ],
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(participantData['email'] ?? "No email"),
+                                if (participantData['regNo'] != null)
+                                  RichText(
+                                    text: TextSpan(
+                                      children: _highlightRegNo(
+                                        "Reg No: ${participantData['regNo']}",
+                                        searchQuery,
+                                      ),
+                                    ),
+                                  ),
+                                if (participantData['department'] != null)
+                                  Text(
+                                    "Department: ${participantData['department']}",
+                                  ),
+                                Row(
+                                  children: [
+                                    Text(
+                                      "Attendance: ",
+                                      style: GoogleFonts.poppins(),
+                                    ),
+                                    GestureDetector(
+                                      onTap: () {
+                                        _showAttendanceDialog(
+                                          context,
+                                          participantId,
+                                          attendance,
+                                        );
+                                      },
+                                      child: Text(
+                                        attendance,
+                                        style: GoogleFonts.poppins(
+                                          color: _getAttendanceColor(
+                                            attendance,
+                                          ),
+                                          fontWeight: FontWeight.bold,
+                                          decoration: TextDecoration.underline,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 5),
+                                    GestureDetector(
+                                      onTap: () {
+                                        _showAttendanceDialog(
+                                          context,
+                                          participantId,
+                                          attendance,
+                                        );
+                                      },
+                                      child: const Icon(
+                                        Icons.edit,
+                                        size: 16,
+                                        color: Colors.orangeAccent,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                if (participantData['phoneNumber'] != null)
+                                  Text(
+                                    "Phone: ${participantData['phoneNumber']}",
+                                  ),
+
+                                if (participantData['registeredAt'] != null)
+                                  Text(
+                                    "Registered: ${_formatTimestamp(participantData['registeredAt'])}",
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 12,
+                                      fontStyle: FontStyle.italic,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            isThreeLine: true,
+                          ),
+                        );
+                      },
                     );
                   },
-                );
-              },
+                ),
+                // Loading indicator overlay
+                if (isLoading)
+                  Container(
+                    color: Colors.black.withOpacity(0.3),
+                    child: const Center(
+                      child: CircularProgressIndicator(
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          Colors.orangeAccent,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ],
       ),
     );
+  }
+
+  Color _getAttendanceColor(String attendance) {
+    switch (attendance.toLowerCase()) {
+      case 'present':
+        return Colors.green;
+      case 'absent':
+        return Colors.red;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  // Show dialog to update attendance
+  void _showAttendanceDialog(
+    BuildContext context,
+    String participantId,
+    String currentAttendance,
+  ) {
+    String selectedAttendance = currentAttendance;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(
+            'Update Attendance',
+            style: GoogleFonts.poppins(
+              fontWeight: FontWeight.bold,
+              color: Colors.orangeAccent,
+            ),
+          ),
+          content: StatefulBuilder(
+            builder: (BuildContext context, StateSetter setState) {
+              return Container(
+                width: double.maxFinite,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children:
+                      attendanceOptions.map((option) {
+                        return RadioListTile<String>(
+                          title: Text(option, style: GoogleFonts.poppins()),
+                          value: option,
+                          groupValue: selectedAttendance,
+                          activeColor: Colors.orangeAccent,
+                          onChanged: (value) {
+                            setState(() {
+                              selectedAttendance = value!;
+                            });
+                          },
+                        );
+                      }).toList(),
+                ),
+              );
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+              },
+              child: Text(
+                'Cancel',
+                style: GoogleFonts.poppins(color: Colors.grey),
+              ),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orangeAccent,
+              ),
+              onPressed: () {
+                _updateAttendance(participantId, selectedAttendance);
+                Navigator.pop(context);
+              },
+              child: Text(
+                'Update',
+                style: GoogleFonts.poppins(color: Colors.white),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // Update attendance in Firestore
+  Future<void> _updateAttendance(
+    String participantId,
+    String attendance,
+  ) async {
+    try {
+      setState(() {
+        isLoading = true;
+      });
+
+      await FirebaseFirestore.instance
+          .collection('events')
+          .doc(widget.eventId)
+          .collection('participants')
+          .doc(participantId)
+          .update({
+            'Attendance': attendance,
+            'attendanceUpdatedAt': FieldValue.serverTimestamp(),
+          });
+
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Attendance updated successfully',
+            style: GoogleFonts.poppins(),
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      // Show error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Failed to update attendance: $e',
+            style: GoogleFonts.poppins(),
+          ),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
   }
 
   List<TextSpan> _highlightRegNo(String text, String query) {

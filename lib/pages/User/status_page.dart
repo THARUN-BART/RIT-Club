@@ -27,91 +27,106 @@ class _StatusPageState extends State<StatusPage>
   Stream<List<DocumentSnapshot>>? _cancelledEventsStream;
   bool _isLoading = true;
   String? _currentUserName;
-  Map<String, bool> _letterGenerationStatus = {};
+  Map<String, bool> _odLetterGenerated = {};
+  Map<String, bool> _registrationLetterGenerated = {};
+  Map<String, bool> _feedbackSubmitted = {};
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this); // Updated to 3 tabs
-    _fetchUserData();
-    _checkRegistrationEndDates();
-    _ensureODCountField(); // Ensure OD count field exists
+    _tabController = TabController(length: 3, vsync: this);
+    _initializeUserData();
   }
 
-  // Make sure the odCount field exists in the user document
-  Future<void> _ensureODCountField() async {
-    final userId = _auth.currentUser?.uid;
-    if (userId == null) return;
-
+  Future<void> _initializeUserData() async {
     try {
-      final userRef = _firestore.collection('users').doc(userId);
-      final userDoc = await userRef.get();
+      final userId = _auth.currentUser?.uid;
+      if (userId == null) return;
 
-      if (userDoc.exists) {
-        final userData = userDoc.data();
-        // If odCount doesn't exist, initialize it
-        if (!userData!.containsKey('odCount')) {
-          await userRef.update({'odCount': 0});
-        }
-        // If processedCancelledEvents doesn't exist, initialize it
-        if (!userData.containsKey('processedCancelledEvents')) {
-          await userRef.update({'processedCancelledEvents': []});
-        }
-      }
+      await _ensureUserFields(userId);
+      await _loadUserData(userId);
+      await _checkAndGenerateLetters();
+
+      setState(() {
+        _isLoading = false;
+      });
     } catch (e) {
-      debugPrint('Error ensuring OD count field: $e');
-    }
-  }
-
-  Future<void> _fetchUserData() async {
-    final userId = _auth.currentUser?.uid;
-    if (userId != null) {
-      try {
-        final userDoc = await _firestore.collection('users').doc(userId).get();
-        if (userDoc.exists) {
-          setState(() {
-            _participatedEventIds = List<String>.from(
-              userDoc.data()?['participatedEventIds'] ?? [],
-            );
-            _currentUserName = userDoc.data()?['name'] ?? 'User';
-            _activeEventsStream = _getEventsByStatus('active');
-            _pastEventsStream = _getEventsByStatus('past');
-            _cancelledEventsStream = _getEventsByStatus('cancelled');
-            _checkExistingLetters();
-            _isLoading = false;
-          });
-        }
-      } catch (e) {
-        debugPrint('Error fetching user data: $e');
-        setState(() {
-          _isLoading = false;
-        });
-      }
-    } else {
+      debugPrint('Error initializing user data: $e');
       setState(() {
         _isLoading = false;
       });
     }
   }
 
-  Future<void> _checkExistingLetters() async {
+  Future<void> _ensureUserFields(String userId) async {
+    final userRef = _firestore.collection('users').doc(userId);
+    final userDoc = await userRef.get();
+
+    if (userDoc.exists) {
+      final userData = userDoc.data()!;
+      final updates = <String, dynamic>{};
+
+      if (!userData.containsKey('odCount')) {
+        updates['odCount'] = 0;
+      }
+      if (!userData.containsKey('processedCancelledEvents')) {
+        updates['processedCancelledEvents'] = [];
+      }
+      if (!userData.containsKey('participatedEventIds')) {
+        updates['participatedEventIds'] = [];
+      }
+
+      if (updates.isNotEmpty) {
+        await userRef.update(updates);
+      }
+    }
+  }
+
+  Future<void> _loadUserData(String userId) async {
+    final userDoc = await _firestore.collection('users').doc(userId).get();
+    if (userDoc.exists) {
+      setState(() {
+        _participatedEventIds = List<String>.from(
+          userDoc.data()?['participatedEventIds'] ?? [],
+        );
+        _currentUserName = userDoc.data()?['name'] ?? 'User';
+        _activeEventsStream = _getEventsByStatus('active');
+        _pastEventsStream = _getEventsByStatus('past');
+        _cancelledEventsStream = _getEventsByStatus('cancelled');
+      });
+
+      await _checkExistingLetters(userId);
+      await _checkExistingFeedback(userId);
+    }
+  }
+
+  Future<void> _checkExistingLetters(String userId) async {
     if (_participatedEventIds.isEmpty) return;
 
-    final userId = _auth.currentUser?.uid;
-    if (userId == null) return;
-
     try {
-      // Get all event letters for this user
-      final lettersSnapshot =
+      final odLetters =
           await _firestore
               .collection('users')
               .doc(userId)
-              .collection('eventLetters')
+              .collection('odLetters')
               .get();
 
       setState(() {
-        for (var letterDoc in lettersSnapshot.docs) {
-          _letterGenerationStatus[letterDoc.id] = true;
+        for (var doc in odLetters.docs) {
+          _odLetterGenerated[doc.id] = true;
+        }
+      });
+
+      final regLetters =
+          await _firestore
+              .collection('users')
+              .doc(userId)
+              .collection('registrationLetters')
+              .get();
+
+      setState(() {
+        for (var doc in regLetters.docs) {
+          _registrationLetterGenerated[doc.id] = true;
         }
       });
     } catch (e) {
@@ -119,70 +134,114 @@ class _StatusPageState extends State<StatusPage>
     }
   }
 
-  // Check for events where registration has ended and generate letters
-  Future<void> _checkRegistrationEndDates() async {
+  Future<void> _checkExistingFeedback(String userId) async {
     if (_participatedEventIds.isEmpty) return;
 
-    final now = DateTime.now();
-    final userId = _auth.currentUser?.uid;
-    if (userId == null) return;
+    try {
+      final feedback =
+          await _firestore
+              .collection('users')
+              .doc(userId)
+              .collection('eventFeedback')
+              .get();
 
-    // Get all active events where user is participating
-    final eventsSnapshot =
-        await _firestore
-            .collection('events')
-            .where(FieldPath.documentId, whereIn: _participatedEventIds)
-            .where('status', isEqualTo: 'active')
-            .get();
-
-    for (var eventDoc in eventsSnapshot.docs) {
-      final data = eventDoc.data();
-
-      // Check if registration end date exists and has passed
-      if (data['registrationEndDate'] != null) {
-        final registrationEndDate =
-            (data['registrationEndDate'] as Timestamp).toDate();
-
-        if (now.isAfter(registrationEndDate)) {
-          // Check if letter already exists
-          final letterDoc =
-              await _firestore
-                  .collection('users')
-                  .doc(userId)
-                  .collection('eventLetters')
-                  .doc(eventDoc.id)
-                  .get();
-
-          if (!letterDoc.exists) {
-            // Generate letter for events where registration ended
-            await _generateEventLetter(
-              eventDoc.id,
-              data['title'] ?? 'Event',
-              (data['eventDateTime'] as Timestamp).toDate(),
-            );
-          }
-
-          setState(() {
-            _letterGenerationStatus[eventDoc.id] = true;
-          });
+      setState(() {
+        for (var doc in feedback.docs) {
+          _feedbackSubmitted[doc.id] = true;
         }
-      }
+      });
+    } catch (e) {
+      debugPrint('Error checking existing feedback: $e');
     }
   }
 
-  Future<void> _generateEventLetter(
+  Future<void> _checkAndGenerateLetters() async {
+    if (_participatedEventIds.isEmpty) return;
+
+    final userId = _auth.currentUser?.uid;
+    if (userId == null) return;
+
+    final now = DateTime.now();
+
+    try {
+      final events =
+          await _firestore
+              .collection('events')
+              .where(FieldPath.documentId, whereIn: _participatedEventIds)
+              .get();
+
+      for (var event in events.docs) {
+        final eventId = event.id;
+        final eventName = event['title'] ?? 'Event';
+        final eventData = event.data();
+        final status = eventData['status']?.toString().toLowerCase() ?? '';
+
+        // Skip cancelled events entirely
+        if (status == 'cancelled') continue;
+
+        DateTime? eventDate = _parseDateTime(eventData['eventDateTime']);
+        DateTime? regEndDate = _parseDateTime(
+          eventData['registrationDateTime'],
+        );
+
+        // Generate OD letter if registration period has ended
+        if (regEndDate != null && now.isAfter(regEndDate)) {
+          if (_odLetterGenerated[eventId] != true) {
+            await _generateODLetter(
+              eventId,
+              eventName,
+              regEndDate,
+              eventDate!,
+              showSnackbar: false,
+            );
+            setState(() => _odLetterGenerated[eventId] = true);
+          }
+        }
+
+        // Generate registration letter if event has ended
+        if (eventDate != null && now.isAfter(eventDate)) {
+          if (_registrationLetterGenerated[eventId] != true) {
+            await _generateRegistrationLetter(
+              eventId,
+              eventName,
+              eventDate,
+              showSnackbar: false,
+            );
+            setState(() => _registrationLetterGenerated[eventId] = true);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error generating letters: $e');
+    }
+  }
+
+  DateTime? _parseDateTime(dynamic dateField) {
+    if (dateField == null) return null;
+    if (dateField is Timestamp) return dateField.toDate();
+    if (dateField is String) return DateTime.parse(dateField);
+    return null;
+  }
+
+  Future<void> _generateODLetter(
     String eventId,
     String eventName,
-    DateTime eventDate,
-  ) async {
+    DateTime regEndDate,
+    DateTime eventDate, {
+    bool showSnackbar = true,
+  }) async {
     try {
       final userId = _auth.currentUser?.uid;
       if (userId == null || _currentUserName == null) return;
 
-      // Create a PDF document
-      final pdf = pw.Document();
+      final eventDoc = await _firestore.collection('events').doc(eventId).get();
+      final eventData = eventDoc.data() ?? {};
 
-      // Add content to the PDF
+      final pdf = pw.Document();
+      final formattedDate = DateFormat('dd MMMM yyyy').format(DateTime.now());
+      final eventDateFormatted = DateFormat('dd MMMM yyyy').format(eventDate);
+      final eventTimeFormatted = DateFormat('hh:mm a').format(eventDate);
+
       pdf.addPage(
         pw.Page(
           pageFormat: PdfPageFormat.a4,
@@ -192,103 +251,465 @@ class _StatusPageState extends State<StatusPage>
               children: [
                 pw.Header(
                   level: 0,
-                  child: pw.Text(
-                    'Event Participation Letter',
-                    textAlign: pw.TextAlign.center,
-                    style: pw.TextStyle(
-                      fontSize: 24,
-                      fontWeight: pw.FontWeight.bold,
+                  child: pw.Center(
+                    child: pw.Column(
+                      mainAxisAlignment: pw.MainAxisAlignment.center,
+                      children: [
+                        pw.Text(
+                          'ON DUTY LETTER',
+                          style: pw.TextStyle(
+                            fontSize: 30,
+                            fontStyle: pw.FontStyle.italic,
+                            fontWeight: pw.FontWeight.bold,
+                          ),
+                        ),
+                        pw.SizedBox(
+                          height: 10,
+                        ), // Adds spacing between the texts
+                        pw.Text(
+                          '${eventData['clubName']}',
+                          style: pw.TextStyle(fontSize: 20),
+                        ),
+                      ],
                     ),
                   ),
                 ),
-                pw.SizedBox(height: 20),
-                pw.Text(
-                  'Date: ${DateFormat('dd MMMM yyyy').format(DateTime.now())}',
-                  style: pw.TextStyle(fontSize: 12),
-                ),
                 pw.SizedBox(height: 30),
-                pw.Text(
-                  'Dear $_currentUserName,',
-                  style: pw.TextStyle(fontSize: 12),
-                ),
-                pw.SizedBox(height: 10),
-                pw.Text(
-                  'This letter confirms your registration for the following event:',
-                  style: pw.TextStyle(fontSize: 12),
+                pw.Container(
+                  alignment: pw.Alignment.topRight,
+                  child: pw.Text(
+                    'Date: $formattedDate',
+                    style: pw.TextStyle(fontSize: 12),
+                  ),
                 ),
                 pw.SizedBox(height: 20),
+                pw.Text('From', style: pw.TextStyle(fontSize: 18)),
+                pw.SizedBox(height: 10),
                 pw.Container(
-                  padding: pw.EdgeInsets.all(10),
-                  decoration: pw.BoxDecoration(
-                    border: pw.Border.all(),
-                    borderRadius: pw.BorderRadius.circular(5),
-                  ),
                   child: pw.Column(
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
                       pw.Text(
-                        'Event Name: $eventName',
-                        style: pw.TextStyle(
-                          fontSize: 14,
-                          fontWeight: pw.FontWeight.bold,
-                        ),
-                      ),
-                      pw.SizedBox(height: 5),
-                      pw.Text(
-                        'Event Date: ${DateFormat('dd MMMM yyyy').format(eventDate)}',
+                        'President of ${eventData['clubName'] ?? 'our institution'}',
                         style: pw.TextStyle(fontSize: 12),
                       ),
+                      pw.Text('RIT CHENNAI'),
+                      pw.Text(formattedDate),
                       pw.SizedBox(height: 5),
+                    ],
+                  ),
+                ),
+                pw.Text('To,', style: pw.TextStyle(fontSize: 18)),
+                pw.SizedBox(height: 10),
+                pw.Container(
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
                       pw.Text(
-                        'Participant: $_currentUserName',
+                        'Dr.Maheswari R,',
                         style: pw.TextStyle(fontSize: 12),
                       ),
+                      pw.Text(
+                        'Dean of Innovation,',
+                        style: pw.TextStyle(fontSize: 12),
+                      ),
+                      pw.Text('RIT CHENNAI'),
                     ],
                   ),
                 ),
                 pw.SizedBox(height: 30),
                 pw.Text(
-                  'Please keep this letter as confirmation of your registration. We look forward to your participation.',
+                  'Subject: Request for On-Duty Approval for Members during $eventName',
                   style: pw.TextStyle(fontSize: 12),
                 ),
                 pw.SizedBox(height: 20),
-                pw.Text('Sincerely,', style: pw.TextStyle(fontSize: 12)),
+                pw.Text(
+                  'Respected Dr.Maheswari,',
+                  style: pw.TextStyle(fontSize: 18),
+                ),
                 pw.SizedBox(height: 10),
-                pw.Text('Event Organizers', style: pw.TextStyle(fontSize: 12)),
+
+                pw.Text(
+                  'This is to certify that $_currentUserName is officially registered for '
+                  'the event "$eventName" organized by ${eventData['clubName'] ?? 'our institution'}. '
+                  'The Event is held on $eventDateFormatted at $eventTimeFormatted, '
+                  'and it is held on ${eventData['location']}',
+                  style: pw.TextStyle(fontSize: 12),
+                ),
+                pw.SizedBox(height: 15),
+                pw.Text(
+                  'We request you to kindly grant official duty permission to the student '
+                  'for participating in this event.',
+                  style: pw.TextStyle(fontSize: 12),
+                ),
+                pw.SizedBox(height: 30),
+                pw.Text('Yours sincerely,', style: pw.TextStyle(fontSize: 12)),
+                pw.SizedBox(height: 5),
+                pw.Text('Event Coordinator', style: pw.TextStyle(fontSize: 12)),
+                pw.Text(
+                  eventData['clubName'] ?? 'Institution',
+                  style: pw.TextStyle(fontSize: 12),
+                ),
+                pw.SizedBox(height: 40),
+                pw.Text('Dr.Maheswari,'),
+                pw.Text('Signature', style: pw.TextStyle(fontSize: 12)),
               ],
             );
           },
         ),
       );
 
-      // Save the PDF to a file
-      final directory = await getApplicationDocumentsDirectory();
-      final file = File('${directory.path}/$eventName-registration-letter.pdf');
+      final dir = await getApplicationDocumentsDirectory();
+      final filePath = '${dir.path}/OD_Letter_${eventId}_$eventName.pdf';
+      final file = File(filePath);
       await file.writeAsBytes(await pdf.save());
 
-      // Save the letter reference to Firestore
-      await _firestore
-          .collection('users')
-          .doc(userId)
-          .collection('eventLetters')
-          .doc(eventId)
-          .set({
+      try {
+        final docRef = _firestore
+            .collection('users')
+            .doc(userId)
+            .collection('odLetters')
+            .doc(eventId);
+
+        final docSnapshot = await docRef.get();
+
+        if (docSnapshot.exists) {
+          await docRef.update({
             'eventId': eventId,
             'eventName': eventName,
-            'eventDate': Timestamp.fromDate(eventDate),
-            'generatedDate': Timestamp.fromDate(DateTime.now()),
-            'letterPath': file.path,
+            'generatedDate': Timestamp.now(),
+            'filePath': file.path,
           });
-
-      setState(() {
-        _letterGenerationStatus[eventId] = true;
-      });
-
-      // Show notification to user
+        } else {
+          await docRef.set({
+            'eventId': eventId,
+            'eventName': eventName,
+            'generatedDate': Timestamp.now(),
+            'filePath': file.path,
+          });
+        }
+      } catch (firestoreError) {
+        debugPrint('Firestore error in OD letter: $firestoreError');
+      }
+    } catch (e) {
+      debugPrint('Error generating OD letter: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Registration letter generated for $eventName'),
+            content: Text('Failed to generate OD letter: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _generateRegistrationLetter(
+    String eventId,
+    String eventName,
+    DateTime eventDate, {
+    bool showSnackbar = true,
+  }) async {
+    try {
+      final userId = _auth.currentUser?.uid;
+      if (userId == null || _currentUserName == null) return;
+
+      final eventDoc = await _firestore.collection('events').doc(eventId).get();
+      final eventData = eventDoc.data() ?? {};
+      final clubName = eventData['clubName'] ?? 'our institution';
+      final venue = eventData['venue'] ?? 'our campus';
+
+      final pdf = pw.Document();
+      final formattedDate = DateFormat('dd MMMM yyyy').format(DateTime.now());
+      final eventDateFormatted = DateFormat('dd MMMM yyyy').format(eventDate);
+      final eventTimeFormatted = DateFormat('hh:mm a').format(eventDate);
+
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          build: (context) {
+            return pw.Container(
+              padding: const pw.EdgeInsets.all(20),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(color: PdfColors.black, width: 2),
+              ),
+              child: pw.Container(
+                padding: const pw.EdgeInsets.all(15),
+                decoration: pw.BoxDecoration(
+                  border: pw.Border.all(
+                    color: PdfColors.black,
+                    width: 1,
+                    style: pw.BorderStyle.dashed,
+                  ),
+                ),
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.center,
+                  children: [
+                    // Certificate Header with ornamental dividers
+                    pw.Row(
+                      children: [
+                        pw.Icon(
+                          Icons.star as pw.IconData,
+                          size: 14,
+                        ), // Star icon
+                        pw.SizedBox(width: 5),
+                        pw.Text(
+                          'CERTIFICATE',
+                          style: pw.TextStyle(
+                            fontSize: 22,
+                            fontWeight: pw.FontWeight.bold,
+                          ),
+                        ),
+                        pw.SizedBox(width: 5),
+                        pw.Icon(
+                          Icons.star as pw.IconData,
+                          size: 14,
+                        ), // Star icon again
+                      ],
+                    ),
+                    pw.SizedBox(height: 5),
+                    pw.Text(
+                      'OF PARTICIPATION',
+                      style: pw.TextStyle(
+                        fontSize: 18,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
+                    ),
+
+                    // Decorative line
+                    pw.Container(
+                      margin: const pw.EdgeInsets.symmetric(vertical: 15),
+                      height: 1,
+                      width: 300,
+                      color: PdfColors.black,
+                    ),
+
+                    pw.SizedBox(height: 30),
+
+                    // Certificate body
+                    pw.Text(
+                      'This is to certify that',
+                      style: pw.TextStyle(fontSize: 14),
+                    ),
+                    pw.SizedBox(height: 10),
+                    pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(
+                        horizontal: 15,
+                        vertical: 5,
+                      ),
+                      decoration: pw.BoxDecoration(
+                        border: pw.Border(
+                          bottom: pw.BorderSide(color: PdfColors.black),
+                        ),
+                      ),
+                      child: pw.Text(
+                        _currentUserName!,
+                        style: pw.TextStyle(
+                          fontSize: 18,
+                          fontWeight: pw.FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    pw.SizedBox(height: 20),
+                    pw.Text(
+                      'has successfully participated in the event',
+                      style: pw.TextStyle(fontSize: 14),
+                    ),
+                    pw.SizedBox(height: 10),
+                    pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 8,
+                      ),
+                      decoration: pw.BoxDecoration(
+                        borderRadius: const pw.BorderRadius.all(
+                          pw.Radius.circular(4),
+                        ),
+                        color: PdfColors.grey200,
+                      ),
+                      child: pw.Text(
+                        eventName,
+                        style: pw.TextStyle(
+                          fontSize: 16,
+                          fontWeight: pw.FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    pw.SizedBox(height: 15),
+                    pw.Text('conducted by', style: pw.TextStyle(fontSize: 14)),
+                    pw.SizedBox(height: 5),
+                    pw.Text(
+                      clubName,
+                      style: pw.TextStyle(
+                        fontSize: 14,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
+                    ),
+                    pw.SizedBox(height: 15),
+                    pw.Text(
+                      'on $eventDateFormatted at $eventTimeFormatted',
+                      style: pw.TextStyle(fontSize: 14),
+                    ),
+                    pw.SizedBox(height: 5),
+                    pw.Text('Venue: $venue', style: pw.TextStyle(fontSize: 14)),
+
+                    pw.SizedBox(height: 30),
+
+                    // Appreciation text
+                    pw.Text(
+                      'We appreciate the active participation and valuable contribution.',
+                      style: pw.TextStyle(
+                        fontSize: 12,
+                        fontStyle: pw.FontStyle.italic,
+                      ),
+                      textAlign: pw.TextAlign.center,
+                    ),
+
+                    // Expand to push signatures to bottom
+                    pw.Spacer(),
+
+                    // Signatures section
+                    pw.Container(
+                      margin: const pw.EdgeInsets.only(top: 20),
+                      child: pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Column(
+                            children: [
+                              pw.Container(
+                                width: 120,
+                                decoration: const pw.BoxDecoration(
+                                  border: pw.Border(bottom: pw.BorderSide()),
+                                ),
+                                height: 1,
+                              ),
+                              pw.SizedBox(height: 5),
+                              pw.Text(
+                                'Event Coordinator',
+                                style: pw.TextStyle(fontSize: 10),
+                              ),
+                            ],
+                          ),
+                          pw.Column(
+                            children: [
+                              pw.Container(
+                                width: 120,
+                                decoration: const pw.BoxDecoration(
+                                  border: pw.Border(bottom: pw.BorderSide()),
+                                ),
+                                height: 1,
+                              ),
+                              pw.SizedBox(height: 5),
+                              pw.Text(
+                                'Club President',
+                                style: pw.TextStyle(fontSize: 10),
+                              ),
+                            ],
+                          ),
+                          pw.Column(
+                            children: [
+                              pw.Container(
+                                width: 120,
+                                decoration: const pw.BoxDecoration(
+                                  border: pw.Border(bottom: pw.BorderSide()),
+                                ),
+                                height: 1,
+                              ),
+                              pw.SizedBox(height: 5),
+                              pw.Text(
+                                'Faculty Advisor',
+                                style: pw.TextStyle(fontSize: 10),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    pw.SizedBox(height: 20),
+
+                    // Place for official stamp
+                    pw.Container(
+                      alignment: pw.Alignment.centerRight,
+                      padding: const pw.EdgeInsets.only(right: 20),
+                      child: pw.Column(
+                        crossAxisAlignment: pw.CrossAxisAlignment.center,
+                        children: [
+                          pw.Container(
+                            width: 70,
+                            height: 70,
+                            decoration: pw.BoxDecoration(
+                              shape: pw.BoxShape.circle,
+                              border: pw.Border.all(
+                                color: PdfColors.grey,
+                                style: pw.BorderStyle.dashed,
+                              ),
+                            ),
+                          ),
+                          pw.SizedBox(height: 5),
+                          pw.Text(
+                            'Official Stamp',
+                            style: pw.TextStyle(fontSize: 8),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // Footer with issue date
+                    pw.Container(
+                      margin: const pw.EdgeInsets.only(top: 20),
+                      alignment: pw.Alignment.centerLeft,
+                      child: pw.Text(
+                        'Issued on: $formattedDate',
+                        style: pw.TextStyle(fontSize: 8),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      );
+
+      final dir = await getApplicationDocumentsDirectory();
+      final filePath = '${dir.path}/Certificate_${eventId}_$eventName.pdf';
+      final file = File(filePath);
+      await file.writeAsBytes(await pdf.save());
+
+      try {
+        final docRef = _firestore
+            .collection('users')
+            .doc(userId)
+            .collection('registrationLetters')
+            .doc(eventId);
+
+        final docSnapshot = await docRef.get();
+
+        if (docSnapshot.exists) {
+          await docRef.update({
+            'eventId': eventId,
+            'eventName': eventName,
+            'generatedDate': Timestamp.now(),
+            'filePath': file.path,
+          });
+        } else {
+          await docRef.set({
+            'eventId': eventId,
+            'eventName': eventName,
+            'generatedDate': Timestamp.now(),
+            'filePath': file.path,
+          });
+        }
+      } catch (firestoreError) {
+        debugPrint('Firestore error in registration letter: $firestoreError');
+      }
+
+      if (mounted && showSnackbar) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Certificate generated for $eventName'),
             action: SnackBarAction(
               label: 'View',
               onPressed: () => OpenFile.open(file.path),
@@ -297,7 +718,16 @@ class _StatusPageState extends State<StatusPage>
         );
       }
     } catch (e) {
-      debugPrint('Error generating event letter: $e');
+      debugPrint('Error generating certificate: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to generate certificate: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      rethrow;
     }
   }
 
@@ -311,64 +741,30 @@ class _StatusPageState extends State<StatusPage>
         .map((snapshot) => snapshot.docs);
   }
 
-  // New method to handle OD count reduction for cancelled events
   Future<void> _decrementODCount(String eventId) async {
     try {
       final userId = _auth.currentUser?.uid;
       if (userId == null) return;
 
-      // Get current OD count
-      final DocumentReference userRef = _firestore
-          .collection('users')
-          .doc(userId);
+      await _firestore.runTransaction((transaction) async {
+        final userRef = _firestore.collection('users').doc(userId);
+        final userDoc = await transaction.get(userRef);
 
-      // Use a transaction to ensure data consistency
-      await _firestore
-          .runTransaction((transaction) async {
-            DocumentSnapshot userDoc = await transaction.get(userRef);
+        if (!userDoc.exists) return;
 
-            if (!userDoc.exists) return null;
+        final userData = userDoc.data()!;
+        final currentODCount = userData['odCount'] ?? 0;
+        final processedEvents = List<String>.from(
+          userData['processedCancelledEvents'] ?? [],
+        );
 
-            // Get current OD count and processed events
-            final Map<String, dynamic> userData =
-                userDoc.data() as Map<String, dynamic>;
-            final int currentODCount = userData['odCount'] ?? 0;
-            final List<String> processedCancelledEvents = List<String>.from(
-              userData['processedCancelledEvents'] ?? [],
-            );
+        if (processedEvents.contains(eventId)) return;
 
-            // If we've already processed this cancelled event, don't do anything
-            if (processedCancelledEvents.contains(eventId)) {
-              return null;
-            }
-
-            // Calculate new OD count (ensure it doesn't go below 0)
-            final int newODCount = currentODCount > 0 ? currentODCount - 1 : 0;
-
-            // Add this event to the processed list
-            processedCancelledEvents.add(eventId);
-
-            // Update user document with new OD count and processed events list
-            transaction.update(userRef, {
-              'odCount': newODCount,
-              'processedCancelledEvents': processedCancelledEvents,
-            });
-
-            return newODCount;
-          })
-          .then((newCount) {
-            // Show notification to user about OD reduction if count was updated
-            if (newCount != null && mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'OD count reduced by 1 due to cancelled event (now: $newCount)',
-                  ),
-                  backgroundColor: Colors.red,
-                ),
-              );
-            }
-          });
+        transaction.update(userRef, {
+          'odCount': currentODCount > 0 ? currentODCount - 1 : 0,
+          'processedCancelledEvents': [...processedEvents, eventId],
+        });
+      });
     } catch (e) {
       debugPrint('Error decrementing OD count: $e');
       if (mounted) {
@@ -382,32 +778,309 @@ class _StatusPageState extends State<StatusPage>
     }
   }
 
+  Future<void> _submitFeedback(String eventId, String eventName) async {
+    final userId = _auth.currentUser?.uid;
+    if (userId == null) return;
+
+    final ratingController = TextEditingController();
+    final commentController = TextEditingController();
+    int selectedRating = 3;
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Event Feedback'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('Event: $eventName'),
+                  const SizedBox(height: 20),
+                  const Text('Rate your experience (1-5):'),
+                  StatefulBuilder(
+                    builder:
+                        (context, setState) => Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: List.generate(
+                            5,
+                            (index) => IconButton(
+                              icon: Icon(
+                                index < selectedRating
+                                    ? Icons.star
+                                    : Icons.star_border,
+                                color: Colors.amber,
+                              ),
+                              onPressed:
+                                  () => setState(
+                                    () => selectedRating = index + 1,
+                                  ),
+                            ),
+                          ),
+                        ),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text('Comments:'),
+                  TextField(
+                    controller: commentController,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      hintText: 'Your feedback...',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Submit'),
+              ),
+            ],
+          ),
+    );
+
+    if (result != true) return;
+
+    try {
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder:
+              (context) => const Center(child: CircularProgressIndicator()),
+        );
+      }
+
+      final feedbackData = {
+        'eventId': eventId,
+        'eventName': eventName,
+        'rating': selectedRating,
+        'comment': commentController.text.trim(),
+        'submittedAt': Timestamp.now(),
+        'userName': _currentUserName,
+      };
+
+      try {
+        await _firestore
+            .collection('users')
+            .doc(userId)
+            .collection('eventFeedback')
+            .doc(eventId)
+            .set(feedbackData);
+
+        await _firestore
+            .collection('events')
+            .doc(eventId)
+            .collection('feedback')
+            .doc(userId)
+            .set(feedbackData);
+
+        setState(() => _feedbackSubmitted[eventId] = true);
+      } catch (firestoreError) {
+        debugPrint('Firestore error in feedback submission: $firestoreError');
+      }
+
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Feedback submitted successfully!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error submitting feedback: $e');
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to submit feedback: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _viewDocument(
+    String collection,
+    String eventId,
+    String eventName,
+  ) async {
+    final userId = _auth.currentUser?.uid;
+    if (userId == null) return;
+
+    // First check if the event is cancelled and we're trying to view a certificate
+    if (collection == 'registrationLetters') {
+      final eventDoc = await _firestore.collection('events').doc(eventId).get();
+      if (eventDoc.exists &&
+          eventDoc.data()?['status']?.toString().toLowerCase() == 'cancelled') {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Certificates are not available for cancelled events',
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+    }
+
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    try {
+      // 1. First try to find the document in local storage
+      String? localFilePath;
+
+      try {
+        final doc =
+            await _firestore
+                .collection('users')
+                .doc(userId)
+                .collection(collection)
+                .doc(eventId)
+                .get();
+
+        if (doc.exists && doc.data()?['filePath'] != null) {
+          localFilePath = doc.data()?['filePath'] as String;
+          final file = File(localFilePath);
+          if (await file.exists()) {
+            if (mounted) {
+              Navigator.of(context).pop();
+              await OpenFile.open(localFilePath);
+              return;
+            }
+          }
+        }
+      } catch (firestoreError) {
+        debugPrint(
+          'Firestore error when trying to get document: $firestoreError',
+        );
+      }
+
+      // 2. If not found locally, generate it
+      final event = await _firestore.collection('events').doc(eventId).get();
+      if (!event.exists) {
+        if (mounted) {
+          Navigator.of(context).pop();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Event data not found'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      final eventData = event.data()!;
+
+      if (collection == 'odLetters') {
+        final regEndDate = _parseDateTime(eventData['registrationDateTime']);
+        final eventDateTime = _parseDateTime(eventData['eventDateTime']);
+        if (regEndDate != null) {
+          await _generateODLetter(
+            eventId,
+            eventName,
+            regEndDate,
+            eventDateTime!,
+          );
+          setState(() => _odLetterGenerated[eventId] = true);
+        }
+      } else {
+        final eventDateTime = _parseDateTime(eventData['eventDateTime']);
+        if (eventDateTime != null) {
+          await _generateRegistrationLetter(eventId, eventName, eventDateTime);
+          setState(() => _registrationLetterGenerated[eventId] = true);
+        }
+      }
+
+      // 3. Try to open the newly created file
+      final dir = await getApplicationDocumentsDirectory();
+      final expectedFilePath =
+          collection == 'odLetters'
+              ? '${dir.path}/OD_Letter_${eventId}_$eventName.pdf'
+              : '${dir.path}/Certificate_${eventId}_$eventName.pdf';
+
+      final file = File(expectedFilePath);
+      if (await file.exists()) {
+        if (mounted) {
+          Navigator.of(context).pop();
+          await OpenFile.open(expectedFilePath);
+        }
+      } else {
+        if (mounted) {
+          Navigator.of(context).pop();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Could not find the generated document'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Error viewing document: $e');
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not open document: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   Widget _buildEventCard(DocumentSnapshot event) {
     final data = event.data() as Map<String, dynamic>;
+    final eventId = event.id;
+    final eventName = data['title'] ?? 'Event';
     final status = data['status']?.toString().toLowerCase() ?? '';
-    final isActive = status == 'active';
     final isCancelled = status == 'cancelled';
-    final hasRegistrationEndDate = data['registrationEndDate'] != null;
-    final registrationEndDate =
-        hasRegistrationEndDate
-            ? (data['registrationEndDate'] as Timestamp).toDate()
-            : null;
-    final isRegistrationEnded =
-        registrationEndDate != null &&
-        DateTime.now().isAfter(registrationEndDate);
-    final hasLetter = _letterGenerationStatus[event.id] == true;
 
-    // Process cancelled event to reduce OD count
+    // Parse dates
+    final eventDate = _parseDateTime(data['eventDateTime']);
+    final regEndDate = _parseDateTime(data['registrationDateTime']);
+    final now = DateTime.now();
+
+    // Check attendance status
+    final attendanceStatus = data['attendance']?.toString().toLowerCase() ?? '';
+    final isPresent = attendanceStatus == 'present';
+
+    // Determine states
+    final isRegEnded = regEndDate != null && now.isAfter(regEndDate);
+    final isEventEnded = eventDate != null && now.isAfter(eventDate);
+    final hasODLetter = _odLetterGenerated[eventId] == true;
+    final hasRegLetter = _registrationLetterGenerated[eventId] == true;
+    final hasFeedback = _feedbackSubmitted[eventId] == true;
+
+    // Handle cancelled events silently
     if (isCancelled) {
-      // Add a button to manually trigger OD count reduction for better user control
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _decrementODCount(event.id);
+        _decrementODCount(eventId);
       });
     }
 
     return Card(
-      elevation: 2,
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      margin: const EdgeInsets.all(8),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -418,7 +1091,7 @@ class _StatusPageState extends State<StatusPage>
               children: [
                 Expanded(
                   child: Text(
-                    data['title'] ?? 'No Title',
+                    eventName,
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -439,376 +1112,228 @@ class _StatusPageState extends State<StatusPage>
                     style: TextStyle(
                       color: _getStatusTextColor(status),
                       fontWeight: FontWeight.bold,
+                      fontSize: 12,
                     ),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 8),
-            if (data['description'] != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(data['description']!),
-              ),
-            if (data['eventDateTime'] != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Row(
-                  children: [
-                    const Icon(Icons.calendar_today, size: 16),
-                    const SizedBox(width: 8),
-                    Text(
-                      data['eventDateTime'] is Timestamp
-                          ? _formatDate(
-                            (data['eventDateTime'] as Timestamp).toDate(),
-                          )
-                          : data['eventDateTime'].toString(),
-                    ),
-                  ],
-                ),
-              ),
-            if (hasRegistrationEndDate)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Row(
-                  children: [
-                    const Icon(Icons.timer, size: 16),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Registration Ends: ${_formatDate(registrationEndDate!)}',
-                      style: TextStyle(
-                        color: isRegistrationEnded ? Colors.red : null,
-                        fontWeight:
-                            isRegistrationEnded ? FontWeight.bold : null,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            if (data['location'] != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Row(
-                  children: [
-                    const Icon(Icons.location_on, size: 16),
-                    const SizedBox(width: 8),
-                    Text(data['location']!),
-                  ],
-                ),
-              ),
-            if (data['clubName'] != null)
-              Row(
-                children: [
-                  const Icon(Icons.people, size: 16),
-                  const SizedBox(width: 8),
-                  Text('Organized by ${data['clubName']!}'),
-                ],
-              ),
-
-            // Display letter button if the registration has ended or letter exists
-            if ((isRegistrationEnded || hasLetter) && !isCancelled)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: ElevatedButton.icon(
-                  onPressed:
-                      () =>
-                          _viewEventLetter(event.id, data['title'] ?? 'Event'),
-                  icon: const Icon(Icons.description),
-                  label: Text(
-                    hasLetter
-                        ? 'View Registration Letter'
-                        : 'Generate Registration Letter',
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    backgroundColor: Colors.orangeAccent,
-                    minimumSize: const Size(double.infinity, 40),
-                  ),
-                ),
-              ),
-
-            // Display notification about OD count reduction for cancelled events
             if (isCancelled)
               Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Column(
-                  children: [
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.red[50],
-                        border: Border.all(color: Colors.red[200]!),
-                        borderRadius: BorderRadius.circular(5),
-                      ),
-                      child: const Row(
-                        children: [
-                          Icon(Icons.info_outline, color: Colors.red),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'This event has been cancelled. Your OD count will be reduced by 1.',
-                              style: TextStyle(color: Colors.red),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    ElevatedButton.icon(
-                      onPressed: () => _decrementODCount(event.id),
-                      icon: const Icon(Icons.update),
-                      label: const Text('Update OD Count'),
-                      style: ElevatedButton.styleFrom(
-                        foregroundColor: Colors.white,
-                        backgroundColor: Colors.red,
-                        minimumSize: const Size(double.infinity, 40),
-                      ),
-                    ),
-                  ],
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'This event has been cancelled',
+                  style: TextStyle(
+                    color: Colors.red.shade700,
+                    fontStyle: FontStyle.italic,
+                  ),
                 ),
               ),
+            if (data['description'] != null)
+              _buildInfoRow(Icons.description, data['description']!),
+            if (eventDate != null)
+              _buildInfoRow(
+                Icons.calendar_today,
+                DateFormat('EEE, MMM d, yyyy • hh:mm a').format(eventDate),
+              ),
+            if (regEndDate != null)
+              _buildInfoRow(
+                Icons.timer,
+                'Registration ends: ${DateFormat('MMM d, yyyy').format(regEndDate)}',
+              ),
+            if (data['clubName'] != null)
+              _buildInfoRow(Icons.group, 'By: ${data['clubName']}'),
+            if (data['venue'] != null)
+              _buildInfoRow(Icons.location_on, data['venue']),
+            // Show attendance status if available
+            if (attendanceStatus.isNotEmpty)
+              _buildInfoRow(
+                Icons.check_circle,
+                'Attendance: ${attendanceStatus.toUpperCase()}',
+                color: isPresent ? Colors.green : Colors.orange,
+              ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                // Show OD Letter button if registration has ended and event is not cancelled
+                if (isRegEnded && !isCancelled)
+                  _buildActionButton(
+                    'OD Letter',
+                    Icons.description,
+                    hasODLetter ? Colors.green : Colors.blue,
+                    () => _viewDocument('odLetters', eventId, eventName),
+                  ),
+
+                if (isEventEnded && !isCancelled && isPresent)
+                  _buildActionButton(
+                    'Certificate',
+                    Icons.card_membership,
+                    hasRegLetter ? Colors.green : Colors.blue,
+                    () => _viewDocument(
+                      'registrationLetters',
+                      eventId,
+                      eventName,
+                    ),
+                  ),
+
+                // Show Feedback button only if:
+                // 1. Event has ended
+                // 2. Not cancelled
+                // 3. Attendance is marked as present
+                // 4. Feedback not already submitted
+                if (isEventEnded && !isCancelled && isPresent && !hasFeedback)
+                  _buildActionButton(
+                    'Feedback',
+                    Icons.feedback,
+                    Colors.orange,
+                    () => _submitFeedback(eventId, eventName),
+                  ),
+              ],
+            ),
           ],
         ),
       ),
     );
   }
 
-  // Helper method to get status color
-  Color _getStatusColor(String status) {
-    switch (status) {
-      case 'active':
-        return Colors.green[50]!;
-      case 'cancelled':
-        return Colors.red[50]!;
-      case 'past':
-        return Colors.grey[200]!;
-      default:
-        return Colors.grey[200]!;
-    }
-  }
-
-  // Helper method to get status text color
-  Color _getStatusTextColor(String status) {
-    switch (status) {
-      case 'active':
-        return Colors.green;
-      case 'cancelled':
-        return Colors.red;
-      case 'past':
-        return Colors.grey;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  Future<void> _viewEventLetter(String eventId, String eventName) async {
-    try {
-      final userId = _auth.currentUser?.uid;
-      if (userId == null) return;
-
-      // Show loading indicator
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder:
-            (context) => const Center(
-              child: CircularProgressIndicator(color: Colors.orangeAccent),
+  // Updated _buildInfoRow to support custom colors
+  Widget _buildInfoRow(IconData icon, String text, {Color? color}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: color ?? Colors.grey),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(fontSize: 14, color: color),
+              softWrap: true,
             ),
-      );
-
-      // Check if letter exists
-      final letterDoc =
-          await _firestore
-              .collection('users')
-              .doc(userId)
-              .collection('eventLetters')
-              .doc(eventId)
-              .get();
-
-      // Close loading indicator
-      if (mounted) {
-        Navigator.of(context).pop();
-      }
-
-      if (letterDoc.exists) {
-        final letterPath = letterDoc.data()?['letterPath'];
-        if (letterPath != null) {
-          // Check if file exists
-          final file = File(letterPath);
-          if (await file.exists()) {
-            // Open existing letter
-            await OpenFile.open(letterPath);
-          } else {
-            // Regenerate if file doesn't exist
-            _regenerateLetterIfNeeded(eventId, eventName);
-          }
-        } else {
-          // Regenerate if path doesn't exist
-          _regenerateLetterIfNeeded(eventId, eventName);
-        }
-      } else {
-        // Generate letter if it doesn't exist
-        _regenerateLetterIfNeeded(eventId, eventName);
-      }
-    } catch (e) {
-      debugPrint('Error viewing event letter: $e');
-      if (mounted) {
-        Navigator.of(context).pop(); // Close loading indicator if still shown
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not open letter. Please try again.'),
           ),
-        );
-      }
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionButton(
+    String label,
+    IconData icon,
+    Color color,
+    VoidCallback onPressed,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 8),
+      child: ElevatedButton.icon(
+        icon: Icon(icon, size: 16),
+        label: Text(label),
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: color,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        ),
+      ),
+    );
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'active':
+        return Colors.green.shade100;
+      case 'past':
+        return Colors.blue.shade100;
+      case 'cancelled':
+        return Colors.red.shade100;
+      default:
+        return Colors.grey.shade100;
     }
   }
 
-  Future<void> _regenerateLetterIfNeeded(
-    String eventId,
-    String eventName,
-  ) async {
-    try {
-      final eventDoc = await _firestore.collection('events').doc(eventId).get();
-      final eventData = eventDoc.data();
-      if (eventData != null && eventData['eventDateTime'] != null) {
-        await _generateEventLetter(
-          eventId,
-          eventName,
-          (eventData['eventDateTime'] as Timestamp).toDate(),
-        );
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Could not generate letter. Event data is missing.',
-              ),
+  Color _getStatusTextColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'active':
+        return Colors.green.shade800;
+      case 'past':
+        return Colors.blue.shade800;
+      case 'cancelled':
+        return Colors.red.shade800;
+      default:
+        return Colors.grey.shade800;
+    }
+  }
+
+  Widget _buildEventsContent(Stream<List<DocumentSnapshot>> eventsStream) {
+    return StreamBuilder<List<DocumentSnapshot>>(
+      stream: eventsStream,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError) {
+          return Center(child: Text('Error: ${snapshot.error}'));
+        }
+
+        final events = snapshot.data ?? [];
+        if (events.isEmpty) {
+          return const Center(
+            child: Text(
+              'No events found',
+              style: TextStyle(color: Colors.grey),
             ),
           );
         }
-      }
-    } catch (e) {
-      debugPrint('Error regenerating letter: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not generate letter. Please try again.'),
-          ),
+
+        return ListView.builder(
+          itemCount: events.length,
+          itemBuilder: (context, index) => _buildEventCard(events[index]),
         );
-      }
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          'My Events',
+          style: GoogleFonts.aclonica(fontSize: 25, color: Colors.orangeAccent),
+        ),
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(text: 'Active'),
+            Tab(text: 'Past'),
+            Tab(text: 'Cancelled'),
+          ],
+          labelColor: Colors.orangeAccent,
+          unselectedLabelColor: Colors.grey,
+          indicatorColor: Colors.orangeAccent,
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildEventsContent(_activeEventsStream!),
+          _buildEventsContent(_pastEventsStream!),
+          _buildEventsContent(_cancelledEventsStream!),
+        ],
+      ),
+    );
   }
 
   @override
   void dispose() {
     _tabController.dispose();
     super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          "My Participated Events",
-          style: GoogleFonts.aclonica(fontSize: 25, color: Colors.orangeAccent),
-        ),
-        centerTitle: true,
-        bottom: TabBar(
-          controller: _tabController,
-          labelColor: Colors.orangeAccent,
-          indicatorColor: Colors.orangeAccent,
-          unselectedLabelColor: Colors.grey,
-          tabs: const [
-            Tab(text: 'Active Events'),
-            Tab(text: 'Past Events'),
-            Tab(text: 'Cancelled Events'),
-          ],
-        ),
-        actions: [
-          // Add a button to show current OD count
-          StreamBuilder<DocumentSnapshot>(
-            stream:
-                _firestore
-                    .collection('users')
-                    .doc(_auth.currentUser?.uid)
-                    .snapshots(),
-            builder: (context, snapshot) {
-              if (!snapshot.hasData) {
-                return const SizedBox.shrink();
-              }
-
-              final userData = snapshot.data?.data() as Map<String, dynamic>?;
-              final odCount = userData?['odCount'] ?? 0;
-
-              return Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
-                ),
-                margin: const EdgeInsets.only(right: 16),
-                decoration: BoxDecoration(
-                  color: Colors.orangeAccent.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.assignment, size: 18),
-                    const SizedBox(width: 4),
-                    Text(
-                      'OD: $odCount',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-      body:
-          _isLoading
-              ? const Center(
-                child: CircularProgressIndicator(color: Colors.orangeAccent),
-              )
-              : TabBarView(
-                controller: _tabController,
-                children: [
-                  _buildEventList(_activeEventsStream ?? Stream.value([])),
-                  _buildEventList(_pastEventsStream ?? Stream.value([])),
-                  _buildEventList(_cancelledEventsStream ?? Stream.value([])),
-                ],
-              ),
-    );
-  }
-
-  Widget _buildEventList(Stream<List<DocumentSnapshot>> stream) {
-    return StreamBuilder<List<DocumentSnapshot>>(
-      stream: stream,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(
-            child: CircularProgressIndicator(color: Colors.orangeAccent),
-          );
-        }
-
-        if (!snapshot.hasData) return Container();
-
-        final docs = snapshot.data ?? [];
-        if (docs.isEmpty) {
-          return const Center(child: Text('No events found'));
-        }
-
-        return ListView.builder(
-          itemCount: docs.length,
-          itemBuilder: (context, index) => _buildEventCard(docs[index]),
-        );
-      },
-    );
-  }
-
-  String _formatDate(DateTime date) {
-    return DateFormat('dd/MM/yyyy').format(date);
   }
 }

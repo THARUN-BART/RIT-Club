@@ -431,7 +431,7 @@ class _AdminHomeState extends State<AdminHome> {
   int _selectedIndex = 0;
   bool _isLoading = true;
   bool _hasClubs = false;
-  List<DocumentSnapshot> _userClubs = []; // Store all user clubs
+  List<DocumentSnapshot> _userClubs = [];
 
   // Update the list to include a new AnnouncementPage
   final List<Widget> _pages = [
@@ -439,7 +439,7 @@ class _AdminHomeState extends State<AdminHome> {
     const EventsPage(),
     Participants(clubName: AdminHome.currentClubName),
     const AnnouncementPage(), // New Announcement page
-    const feedback(),
+    feedback(clubId: AdminHome.currentClubId),
   ];
 
   @override
@@ -504,7 +504,7 @@ class _AdminHomeState extends State<AdminHome> {
       case 3:
         return const AnnouncementPage();
       case 4:
-        return const feedback();
+        return feedback(clubId: AdminHome.currentClubId);
       default:
         return const AdminDashboardPage();
     }
@@ -514,7 +514,12 @@ class _AdminHomeState extends State<AdminHome> {
   Widget build(BuildContext context) {
     if (_isLoading) {
       return Scaffold(
-        appBar: AppBar(title: const Text("Club Admin Dashboard")),
+        appBar: AppBar(
+          title: const Text(
+            "Club Admin Dashboard",
+            style: TextStyle(fontSize: 20),
+          ),
+        ),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
@@ -551,7 +556,7 @@ class _AdminHomeState extends State<AdminHome> {
             Text(
               "Club Admin Dashboard",
               style: GoogleFonts.aclonica(
-                fontSize: 25,
+                fontSize: 18,
                 color: Colors.orangeAccent,
               ),
             ),

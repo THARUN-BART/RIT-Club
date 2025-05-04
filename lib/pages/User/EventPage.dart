@@ -238,6 +238,7 @@ class _EventPageState extends State<EventPage> {
             'email': userDoc['email'],
             'department': userDoc['department'],
             'phoneNumber': phoneNumber,
+            'Attendance': 'ABSENT',
             'registeredAt': FieldValue.serverTimestamp(),
           });
 
