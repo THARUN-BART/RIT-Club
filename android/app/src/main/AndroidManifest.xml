@@ -53,6 +53,13 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <meta-data android:name="onesignal_app_id" android:value="YOUR_ONESIGNAL_APP_ID"/>
+        <meta-data android:name="onesignal_google_project_number" android:value="REMOTE"/>
     </application>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"
+        tools:ignore="ManifestOrder" />
+    <uses-permission android:name="android.permission.VIBRATE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
 </manifest>

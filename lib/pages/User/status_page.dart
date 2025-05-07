@@ -418,13 +418,14 @@ class _StatusPageState extends State<StatusPage>
       final eventDoc = await _firestore.collection('events').doc(eventId).get();
       final eventData = eventDoc.data() ?? {};
       final clubName = eventData['clubName'] ?? 'our institution';
-      final venue = eventData['venue'] ?? 'our campus';
+      final venue = eventData['location'] ?? 'our campus';
 
       final pdf = pw.Document();
       final formattedDate = DateFormat('dd MMMM yyyy').format(DateTime.now());
       final eventDateFormatted = DateFormat('dd MMMM yyyy').format(eventDate);
       final eventTimeFormatted = DateFormat('hh:mm a').format(eventDate);
 
+      // Updated Certificate Layout with Digital Signature
       pdf.addPage(
         pw.Page(
           pageFormat: PdfPageFormat.a4,
@@ -446,53 +447,25 @@ class _StatusPageState extends State<StatusPage>
                 child: pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.center,
                   children: [
-                    // Certificate Header with ornamental dividers
-                    pw.Row(
-                      children: [
-                        pw.Icon(
-                          Icons.star as pw.IconData,
-                          size: 14,
-                        ), // Star icon
-                        pw.SizedBox(width: 5),
-                        pw.Text(
-                          'CERTIFICATE',
-                          style: pw.TextStyle(
-                            fontSize: 22,
-                            fontWeight: pw.FontWeight.bold,
-                          ),
-                        ),
-                        pw.SizedBox(width: 5),
-                        pw.Icon(
-                          Icons.star as pw.IconData,
-                          size: 14,
-                        ), // Star icon again
-                      ],
-                    ),
-                    pw.SizedBox(height: 5),
+                    // Certificate Header
                     pw.Text(
-                      'OF PARTICIPATION',
+                      'Certificate of Participation',
                       style: pw.TextStyle(
-                        fontSize: 18,
+                        fontSize: 22,
                         fontWeight: pw.FontWeight.bold,
                       ),
                     ),
 
-                    // Decorative line
-                    pw.Container(
-                      margin: const pw.EdgeInsets.symmetric(vertical: 15),
-                      height: 1,
-                      width: 300,
-                      color: PdfColors.black,
-                    ),
+                    pw.SizedBox(height: 15),
 
-                    pw.SizedBox(height: 30),
-
-                    // Certificate body
                     pw.Text(
                       'This is to certify that',
                       style: pw.TextStyle(fontSize: 14),
                     ),
+
                     pw.SizedBox(height: 10),
+
+                    // Participant Name
                     pw.Container(
                       padding: const pw.EdgeInsets.symmetric(
                         horizontal: 15,
@@ -511,12 +484,16 @@ class _StatusPageState extends State<StatusPage>
                         ),
                       ),
                     ),
+
                     pw.SizedBox(height: 20),
+
                     pw.Text(
                       'has successfully participated in the event',
                       style: pw.TextStyle(fontSize: 14),
                     ),
+
                     pw.SizedBox(height: 10),
+
                     pw.Container(
                       padding: const pw.EdgeInsets.symmetric(
                         horizontal: 20,
@@ -536,9 +513,12 @@ class _StatusPageState extends State<StatusPage>
                         ),
                       ),
                     ),
+
                     pw.SizedBox(height: 15),
-                    pw.Text('conducted by', style: pw.TextStyle(fontSize: 14)),
+
+                    pw.Text('Organized by', style: pw.TextStyle(fontSize: 14)),
                     pw.SizedBox(height: 5),
+
                     pw.Text(
                       clubName,
                       style: pw.TextStyle(
@@ -546,9 +526,11 @@ class _StatusPageState extends State<StatusPage>
                         fontWeight: pw.FontWeight.bold,
                       ),
                     ),
+
                     pw.SizedBox(height: 15),
+
                     pw.Text(
-                      'on $eventDateFormatted at $eventTimeFormatted',
+                      'Date: $eventDateFormatted | Time: $eventTimeFormatted',
                       style: pw.TextStyle(fontSize: 14),
                     ),
                     pw.SizedBox(height: 5),
@@ -556,9 +538,11 @@ class _StatusPageState extends State<StatusPage>
 
                     pw.SizedBox(height: 30),
 
-                    // Appreciation text
+                    // Appreciation message
                     pw.Text(
-                      'We appreciate the active participation and valuable contribution.',
+                      'We sincerely appreciate your dedication and enthusiastic participation. '
+                      'Your contributions made this event more meaningful and impactful. '
+                      'Thank you for being a part of this journey!',
                       style: pw.TextStyle(
                         fontSize: 12,
                         fontStyle: pw.FontStyle.italic,
@@ -569,67 +553,9 @@ class _StatusPageState extends State<StatusPage>
                     // Expand to push signatures to bottom
                     pw.Spacer(),
 
-                    // Signatures section
-                    pw.Container(
-                      margin: const pw.EdgeInsets.only(top: 20),
-                      child: pw.Row(
-                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                        children: [
-                          pw.Column(
-                            children: [
-                              pw.Container(
-                                width: 120,
-                                decoration: const pw.BoxDecoration(
-                                  border: pw.Border(bottom: pw.BorderSide()),
-                                ),
-                                height: 1,
-                              ),
-                              pw.SizedBox(height: 5),
-                              pw.Text(
-                                'Event Coordinator',
-                                style: pw.TextStyle(fontSize: 10),
-                              ),
-                            ],
-                          ),
-                          pw.Column(
-                            children: [
-                              pw.Container(
-                                width: 120,
-                                decoration: const pw.BoxDecoration(
-                                  border: pw.Border(bottom: pw.BorderSide()),
-                                ),
-                                height: 1,
-                              ),
-                              pw.SizedBox(height: 5),
-                              pw.Text(
-                                'Club President',
-                                style: pw.TextStyle(fontSize: 10),
-                              ),
-                            ],
-                          ),
-                          pw.Column(
-                            children: [
-                              pw.Container(
-                                width: 120,
-                                decoration: const pw.BoxDecoration(
-                                  border: pw.Border(bottom: pw.BorderSide()),
-                                ),
-                                height: 1,
-                              ),
-                              pw.SizedBox(height: 5),
-                              pw.Text(
-                                'Faculty Advisor',
-                                style: pw.TextStyle(fontSize: 10),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-
                     pw.SizedBox(height: 20),
 
-                    // Place for official stamp
+                    // Digital Signature
                     pw.Container(
                       alignment: pw.Alignment.centerRight,
                       padding: const pw.EdgeInsets.only(right: 20),
@@ -637,20 +563,20 @@ class _StatusPageState extends State<StatusPage>
                         crossAxisAlignment: pw.CrossAxisAlignment.center,
                         children: [
                           pw.Container(
-                            width: 70,
-                            height: 70,
+                            width: 150,
+                            height: 50,
                             decoration: pw.BoxDecoration(
-                              shape: pw.BoxShape.circle,
                               border: pw.Border.all(
-                                color: PdfColors.grey,
-                                style: pw.BorderStyle.dashed,
+                                color: PdfColors.black,
+                                style: pw.BorderStyle.solid,
                               ),
                             ),
-                          ),
-                          pw.SizedBox(height: 5),
-                          pw.Text(
-                            'Official Stamp',
-                            style: pw.TextStyle(fontSize: 8),
+                            child: pw.Center(
+                              child: pw.Text(
+                                'Digitally Signed',
+                                style: pw.TextStyle(fontSize: 12),
+                              ),
+                            ),
                           ),
                         ],
                       ),
@@ -672,7 +598,6 @@ class _StatusPageState extends State<StatusPage>
           },
         ),
       );
-
       final dir = await getApplicationDocumentsDirectory();
       final filePath = '${dir.path}/Certificate_${eventId}_$eventName.pdf';
       final file = File(filePath);
@@ -1049,152 +974,218 @@ class _StatusPageState extends State<StatusPage>
     }
   }
 
+  Future<Map<String, dynamic>?> _getParticipantData(String eventId) async {
+    try {
+      final userId = _auth.currentUser?.uid;
+      if (userId == null) return null;
+
+      final participantDoc =
+          await _firestore
+              .collection('events')
+              .doc(eventId)
+              .collection('participants')
+              .doc(userId)
+              .get();
+
+      return participantDoc.data();
+    } catch (e) {
+      debugPrint('Error fetching participant data: $e');
+      return null;
+    }
+  }
+
   Widget _buildEventCard(DocumentSnapshot event) {
     final data = event.data() as Map<String, dynamic>;
     final eventId = event.id;
     final eventName = data['title'] ?? 'Event';
     final status = data['status']?.toString().toLowerCase() ?? '';
     final isCancelled = status == 'cancelled';
+    final isPast = status == 'past';
 
     // Parse dates
     final eventDate = _parseDateTime(data['eventDateTime']);
     final regEndDate = _parseDateTime(data['registrationDateTime']);
     final now = DateTime.now();
 
-    // Check attendance status
-    final attendanceStatus = data['attendance']?.toString().toLowerCase() ?? '';
-    final isPresent = attendanceStatus == 'present';
-
     // Determine states
     final isRegEnded = regEndDate != null && now.isAfter(regEndDate);
-    final isEventEnded = eventDate != null && now.isAfter(eventDate);
+    final isEventEnded = eventDate != null && now.isAfter(eventDate) || isPast;
     final hasODLetter = _odLetterGenerated[eventId] == true;
     final hasRegLetter = _registrationLetterGenerated[eventId] == true;
     final hasFeedback = _feedbackSubmitted[eventId] == true;
 
-    // Handle cancelled events silently
-    if (isCancelled) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _decrementODCount(eventId);
-      });
-    }
+    return FutureBuilder<Map<String, dynamic>?>(
+      future: _getParticipantData(eventId),
+      builder: (context, participantSnapshot) {
+        String participantStatus = 'unknown';
+        bool isPresent = false;
+        String? participantName;
+        DateTime? attendanceUpdatedAt;
 
-    return Card(
-      margin: const EdgeInsets.all(8),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        if (participantSnapshot.connectionState == ConnectionState.done &&
+            participantSnapshot.hasData &&
+            participantSnapshot.data != null) {
+          final participantData = participantSnapshot.data!;
+          participantStatus =
+              participantData['Attendance']?.toString().toLowerCase() ??
+              'unknown';
+          isPresent = participantStatus == 'present';
+          participantName = participantData['name']?.toString();
+
+          // Parse attendance update timestamp if available
+          if (participantData['attendanceUpdateAt'] != null) {
+            attendanceUpdatedAt = _parseDateTime(
+              participantData['attendanceUpdateAt'],
+            );
+          }
+        }
+
+        // Handle cancelled events silently
+        if (isCancelled) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _decrementODCount(eventId);
+          });
+        }
+
+        return Card(
+          margin: const EdgeInsets.all(8),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Text(
-                    eventName,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        eventName,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ),
-                  ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _getStatusColor(status),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        status.toUpperCase(),
+                        style: TextStyle(
+                          color: _getStatusTextColor(status),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: _getStatusColor(status),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    status.toUpperCase(),
-                    style: TextStyle(
-                      color: _getStatusTextColor(status),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
+                const SizedBox(height: 8),
+                if (isCancelled)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'This event has been cancelled',
+                      style: TextStyle(
+                        color: Colors.red.shade700,
+                        fontStyle: FontStyle.italic,
+                      ),
                     ),
                   ),
+                if (participantName != null)
+                  _buildInfoRow(
+                    Icons.person,
+                    'Registered as: $participantName',
+                  ),
+                if (data['description'] != null)
+                  _buildInfoRow(Icons.description, data['description']!),
+                if (eventDate != null)
+                  _buildInfoRow(
+                    Icons.calendar_today,
+                    DateFormat('EEE, MMM d, yyyy • hh:mm a').format(eventDate),
+                  ),
+                if (regEndDate != null)
+                  _buildInfoRow(
+                    Icons.timer,
+                    'Registration ends: ${DateFormat('MMM d, yyyy').format(regEndDate)}',
+                  ),
+                if (data['clubName'] != null)
+                  _buildInfoRow(Icons.group, 'By: ${data['clubName']}'),
+                if (data['venue'] != null)
+                  _buildInfoRow(Icons.location_on, data['venue']),
+                // Show attendance status if available
+                if (participantStatus != 'unknown')
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildInfoRow(
+                        isPresent ? Icons.check_circle : Icons.cancel,
+                        'Attendance: ${participantStatus.toUpperCase()}',
+                        color: isPresent ? Colors.green : Colors.red,
+                      ),
+                      if (attendanceUpdatedAt != null)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 24),
+                          child: Text(
+                            'Marked on: ${DateFormat('MMM d, yyyy hh:mm a').format(attendanceUpdatedAt!)}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    // Show OD Letter button if registration has ended and event is not cancelled
+                    if (isRegEnded && !isCancelled)
+                      _buildActionButton(
+                        'OD Letter',
+                        Icons.description,
+                        hasODLetter ? Colors.green : Colors.blue,
+                        () => _viewDocument('odLetters', eventId, eventName),
+                      ),
+
+                    // Show Certificate button for past events or ended events with present attendance
+                    if ((isEventEnded || isPast) && !isCancelled && isPresent)
+                      _buildActionButton(
+                        'Certificate',
+                        Icons.card_membership,
+                        hasRegLetter ? Colors.green : Colors.blue,
+                        () => _viewDocument(
+                          'registrationLetters',
+                          eventId,
+                          eventName,
+                        ),
+                      ),
+
+                    // Show Feedback button for past events or ended events with present attendance
+                    if ((isEventEnded || isPast) &&
+                        !isCancelled &&
+                        isPresent &&
+                        !hasFeedback)
+                      _buildActionButton(
+                        'Feedback',
+                        Icons.feedback,
+                        Colors.orange,
+                        () => _submitFeedback(eventId, eventName),
+                      ),
+                  ],
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            if (isCancelled)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'This event has been cancelled',
-                  style: TextStyle(
-                    color: Colors.red.shade700,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ),
-            if (data['description'] != null)
-              _buildInfoRow(Icons.description, data['description']!),
-            if (eventDate != null)
-              _buildInfoRow(
-                Icons.calendar_today,
-                DateFormat('EEE, MMM d, yyyy • hh:mm a').format(eventDate),
-              ),
-            if (regEndDate != null)
-              _buildInfoRow(
-                Icons.timer,
-                'Registration ends: ${DateFormat('MMM d, yyyy').format(regEndDate)}',
-              ),
-            if (data['clubName'] != null)
-              _buildInfoRow(Icons.group, 'By: ${data['clubName']}'),
-            if (data['venue'] != null)
-              _buildInfoRow(Icons.location_on, data['venue']),
-            // Show attendance status if available
-            if (attendanceStatus.isNotEmpty)
-              _buildInfoRow(
-                Icons.check_circle,
-                'Attendance: ${attendanceStatus.toUpperCase()}',
-                color: isPresent ? Colors.green : Colors.orange,
-              ),
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                // Show OD Letter button if registration has ended and event is not cancelled
-                if (isRegEnded && !isCancelled)
-                  _buildActionButton(
-                    'OD Letter',
-                    Icons.description,
-                    hasODLetter ? Colors.green : Colors.blue,
-                    () => _viewDocument('odLetters', eventId, eventName),
-                  ),
-
-                if (isEventEnded && !isCancelled && isPresent)
-                  _buildActionButton(
-                    'Certificate',
-                    Icons.card_membership,
-                    hasRegLetter ? Colors.green : Colors.blue,
-                    () => _viewDocument(
-                      'registrationLetters',
-                      eventId,
-                      eventName,
-                    ),
-                  ),
-
-                // Show Feedback button only if:
-                // 1. Event has ended
-                // 2. Not cancelled
-                // 3. Attendance is marked as present
-                // 4. Feedback not already submitted
-                if (isEventEnded && !isCancelled && isPresent && !hasFeedback)
-                  _buildActionButton(
-                    'Feedback',
-                    Icons.feedback,
-                    Colors.orange,
-                    () => _submitFeedback(eventId, eventName),
-                  ),
-              ],
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 

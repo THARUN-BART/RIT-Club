@@ -8,6 +8,9 @@ import 'package:rit_club/pages/User/ClubAnouncement.dart';
 import 'package:rit_club/pages/User/EventPage.dart';
 import 'package:rit_club/pages/User/status_page.dart';
 
+import 'notification.dart';
+import 'notification_batch.dart';
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -737,6 +740,18 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 ),
                 centerTitle: true,
                 actions: [
+                  // Add notification badge and icon
+                  NotificationBadge(
+                    child: const Icon(Icons.notifications),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const EventNotification(),
+                        ),
+                      );
+                    },
+                  ),
                   IconButton(
                     onPressed: () {
                       Navigator.push(

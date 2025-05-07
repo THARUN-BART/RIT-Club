@@ -179,7 +179,7 @@ class _ClubCreationPageState extends State<ClubCreationPage> {
             'createdBy': user.email,
             'adminIds': user.uid,
             'memberCount': 0,
-            'followers': [], // Initialize empty followers array
+            'followers': [],
           });
 
       await clubRef.collection('events').add({
@@ -439,7 +439,10 @@ class _AdminHomeState extends State<AdminHome> {
     const EventsPage(),
     Participants(clubName: AdminHome.currentClubName),
     const AnnouncementPage(), // New Announcement page
-    feedback(clubId: AdminHome.currentClubId),
+    FeedbackPage(
+      clubId: AdminHome.currentClubId,
+      clubName: AdminHome.currentClubName,
+    ),
   ];
 
   @override
@@ -504,7 +507,10 @@ class _AdminHomeState extends State<AdminHome> {
       case 3:
         return const AnnouncementPage();
       case 4:
-        return feedback(clubId: AdminHome.currentClubId);
+        return FeedbackPage(
+          clubId: AdminHome.currentClubId,
+          clubName: AdminHome.currentClubName,
+        );
       default:
         return const AdminDashboardPage();
     }

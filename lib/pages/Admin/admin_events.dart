@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'admin_home.dart';
+import 'dart:async';
 
 class EventsPage extends StatefulWidget {
   const EventsPage({super.key});
@@ -19,17 +20,58 @@ class _EventsPageState extends State<EventsPage>
   TimeOfDay? registrationTime;
   DateTime? eventDate;
   TimeOfDay? eventTime;
+  Timer? _statusCheckTimer;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _checkAndUpdatePastEvents();
+    _statusCheckTimer = Timer.periodic(const Duration(minutes: 30), (_) {
+      if (mounted) _checkAndUpdatePastEvents();
+    });
   }
 
   @override
   void dispose() {
+    _statusCheckTimer?.cancel();
     _tabController.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkAndUpdatePastEvents() async {
+    try {
+      final now = DateTime.now();
+      final activeEvents =
+          await FirebaseFirestore.instance
+              .collection('events')
+              .where('clubId', isEqualTo: AdminHome.currentClubId)
+              .where('status', isEqualTo: 'active')
+              .get();
+
+      final batch = FirebaseFirestore.instance.batch();
+
+      for (final doc in activeEvents.docs) {
+        final event = doc.data() as Map<String, dynamic>;
+        if (event['eventDateTime'] == null) continue;
+
+        final eventDateTime = DateTime.parse(event['eventDateTime']);
+        final eventEndTime = eventDateTime.add(const Duration(hours: 2));
+
+        if (now.isAfter(eventEndTime)) {
+          batch.update(doc.reference, {
+            'status': 'past',
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+      }
+
+      if (activeEvents.docs.isNotEmpty) {
+        await batch.commit();
+      }
+    } catch (e) {
+      debugPrint('Error updating past events: $e');
+    }
   }
 
   Future<String?> fetchLoginClubName() async {
@@ -45,67 +87,14 @@ class _EventsPageState extends State<EventsPage>
     return null;
   }
 
-  Future<void> pickDate(
-    BuildContext context,
-    Function(DateTime) onDatePicked, {
-    DateTime? minDate,
-  }) async {
-    final DateTime minimumDate = minDate ?? DateTime.now();
-
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: DateTime.now(),
-      firstDate: minimumDate,
-      lastDate: DateTime(2100),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.light(
-              primary: Colors.orangeAccent,
-              onPrimary: Colors.white,
-              onSurface: Colors.black,
-            ),
-          ),
-          child: child!,
-        );
-      },
-    );
-    if (picked != null) {
-      onDatePicked(picked);
-    }
-  }
-
-  Future<void> pickTime(
-    BuildContext context,
-    Function(TimeOfDay) onTimePicked,
-  ) async {
-    final TimeOfDay? picked = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.now(),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.light(
-              primary: Colors.orangeAccent,
-              onPrimary: Colors.white,
-              onSurface: Colors.black,
-            ),
-          ),
-          child: child!,
-        );
-      },
-    );
-    if (picked != null) {
-      onTimePicked(picked);
-    }
-  }
-
   void showEventDialog(BuildContext context) {
     final titleController = TextEditingController();
     final descriptionController = TextEditingController();
     final participantLimitController = TextEditingController();
     final locationController = TextEditingController();
+    final teamSizeController = TextEditingController();
 
+    bool isTeamEvent = false;
     registrationDate = null;
     registrationTime = null;
     eventDate = null;
@@ -214,11 +203,29 @@ class _EventsPageState extends State<EventsPage>
                           Icons.access_time,
                         ),
                         const SizedBox(height: 15),
+                        SwitchListTile(
+                          title: const Text("Team Event"),
+                          value: isTeamEvent,
+                          onChanged:
+                              (value) => setState(() => isTeamEvent = value),
+                        ),
+                        if (isTeamEvent) ...[
+                          const SizedBox(height: 15),
+                          TextField(
+                            controller: teamSizeController,
+                            keyboardType: TextInputType.number,
+                            decoration: _inputDecoration(
+                              "Team Size (members per team)",
+                              Icons.group_add,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 15),
                         TextField(
                           controller: participantLimitController,
                           keyboardType: TextInputType.number,
                           decoration: _inputDecoration(
-                            "Participant Limit",
+                            isTeamEvent ? "Maximum Teams" : "Participant Limit",
                             Icons.people,
                           ),
                         ),
@@ -267,11 +274,27 @@ class _EventsPageState extends State<EventsPage>
                           eventTime!.minute,
                         );
 
-                        if (eventDateTime.isBefore(registrationDateTime)) {
+                        if (eventDateTime.isBefore(registrationDateTime) &&
+                            !_isSameDay(eventDateTime, registrationDateTime)) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text(
-                                "Event date must be after registration date",
+                                "Event date must be on or after registration date",
+                              ),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                          return;
+                        }
+
+                        if (isTeamEvent &&
+                            (teamSizeController.text.isEmpty ||
+                                int.tryParse(teamSizeController.text) == null ||
+                                int.parse(teamSizeController.text) < 2)) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                "Team size must be at least 2 members",
                               ),
                               backgroundColor: Colors.red,
                             ),
@@ -280,27 +303,30 @@ class _EventsPageState extends State<EventsPage>
                         }
 
                         try {
+                          final eventData = {
+                            'title': titleController.text,
+                            'description': descriptionController.text,
+                            'clubName': clubName,
+                            'clubId': AdminHome.currentClubId,
+                            'location': locationController.text,
+                            'registrationDateTime':
+                                registrationDateTime.toIso8601String(),
+                            'eventDateTime': eventDateTime.toIso8601String(),
+                            'participantLimit':
+                                int.tryParse(participantLimitController.text) ??
+                                0,
+                            'participants': 0,
+                            'createdAt': DateTime.now().toIso8601String(),
+                            'status': 'active',
+                            'isTeamEvent': isTeamEvent,
+                            if (isTeamEvent)
+                              'teamSize': int.parse(teamSizeController.text),
+                            'teams': [],
+                          };
+
                           await FirebaseFirestore.instance
                               .collection('events')
-                              .add({
-                                'title': titleController.text,
-                                'description': descriptionController.text,
-                                'clubName': clubName,
-                                'clubId': AdminHome.currentClubId,
-                                'location': locationController.text,
-                                'registrationDateTime':
-                                    registrationDateTime.toIso8601String(),
-                                'eventDateTime':
-                                    eventDateTime.toIso8601String(),
-                                'participantLimit':
-                                    int.tryParse(
-                                      participantLimitController.text,
-                                    ) ??
-                                    0,
-                                'participants': 0,
-                                'createdAt': DateTime.now().toIso8601String(),
-                                'status': 'active',
-                              });
+                              .add(eventData);
 
                           Navigator.of(context).pop();
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -335,6 +361,12 @@ class _EventsPageState extends State<EventsPage>
         );
       },
     );
+  }
+
+  bool _isSameDay(DateTime date1, DateTime date2) {
+    return date1.year == date2.year &&
+        date1.month == date2.month &&
+        date1.day == date2.day;
   }
 
   static InputDecoration _inputDecoration(String label, IconData icon) {
@@ -448,6 +480,61 @@ class _EventsPageState extends State<EventsPage>
     );
   }
 
+  Future<void> pickDate(
+    BuildContext context,
+    Function(DateTime) onDatePicked, {
+    DateTime? minDate,
+  }) async {
+    final DateTime minimumDate = minDate ?? DateTime.now();
+
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: minimumDate,
+      lastDate: DateTime(2100),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: Colors.orangeAccent,
+              onPrimary: Colors.white,
+              onSurface: Colors.black,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null) {
+      onDatePicked(picked);
+    }
+  }
+
+  Future<void> pickTime(
+    BuildContext context,
+    Function(TimeOfDay) onTimePicked,
+  ) async {
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: Colors.orangeAccent,
+              onPrimary: Colors.white,
+              onSurface: Colors.black,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null) {
+      onTimePicked(picked);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -489,31 +576,16 @@ class _EventsPageState extends State<EventsPage>
 
   Widget _buildEventsList(String status) {
     Query eventsQuery;
-    DateTime now = DateTime.now();
 
-    if (AdminHome.currentClubId != null) {
-      if (status == 'cancelled') {
-        eventsQuery = FirebaseFirestore.instance
-            .collection('events')
-            .where('clubId', isEqualTo: AdminHome.currentClubId)
-            .where('status', isEqualTo: 'cancelled')
-            .orderBy('eventDateTime', descending: true);
-      } else if (status == 'past') {
-        eventsQuery = FirebaseFirestore.instance
-            .collection('events')
-            .where('clubId', isEqualTo: AdminHome.currentClubId)
-            .where('status', isEqualTo: 'active')
-            .orderBy('eventDateTime', descending: true);
-      } else {
-        eventsQuery = FirebaseFirestore.instance
-            .collection('events')
-            .where('clubId', isEqualTo: AdminHome.currentClubId)
-            .where('status', isEqualTo: 'active')
-            .orderBy('eventDateTime');
-      }
-    } else {
-      eventsQuery = FirebaseFirestore.instance.collection('events').limit(0);
+    if (AdminHome.currentClubId == null) {
+      return const Center(child: Text("No club selected"));
     }
+
+    eventsQuery = FirebaseFirestore.instance
+        .collection('events')
+        .where('clubId', isEqualTo: AdminHome.currentClubId)
+        .where('status', isEqualTo: status)
+        .orderBy('eventDateTime', descending: status != 'active');
 
     return StreamBuilder<QuerySnapshot>(
       stream: eventsQuery.snapshots(),
@@ -529,39 +601,8 @@ class _EventsPageState extends State<EventsPage>
         }
 
         final events = snapshot.data?.docs ?? [];
-        List<QueryDocumentSnapshot> filteredEvents = [];
 
-        if (status == 'active') {
-          filteredEvents =
-              events.where((doc) {
-                final event = doc.data() as Map<String, dynamic>;
-                if (event['eventDateTime'] == null) return false;
-                try {
-                  final eventDate = DateTime.parse(event['eventDateTime']);
-                  // Event is active if current time is before event time + 2 hours
-                  return now.isBefore(eventDate.add(const Duration(hours: 2)));
-                } catch (e) {
-                  return false;
-                }
-              }).toList();
-        } else if (status == 'past') {
-          filteredEvents =
-              events.where((doc) {
-                final event = doc.data() as Map<String, dynamic>;
-                if (event['eventDateTime'] == null) return false;
-                try {
-                  final eventDate = DateTime.parse(event['eventDateTime']);
-                  // Event is past if current time is after event time + 2 hours
-                  return now.isAfter(eventDate.add(const Duration(hours: 2)));
-                } catch (e) {
-                  return false;
-                }
-              }).toList();
-        } else {
-          filteredEvents = events;
-        }
-
-        if (filteredEvents.isEmpty) {
+        if (events.isEmpty) {
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -597,26 +638,16 @@ class _EventsPageState extends State<EventsPage>
 
         return ListView.builder(
           padding: const EdgeInsets.all(16),
-          itemCount: filteredEvents.length,
+          itemCount: events.length,
           itemBuilder: (context, index) {
-            final event = filteredEvents[index].data() as Map<String, dynamic>;
+            final event = events[index].data() as Map<String, dynamic>;
             final eventDateTime =
                 event['eventDateTime'] != null
                     ? DateTime.parse(event['eventDateTime'])
                     : null;
 
-            final isCancelled = event['status'] == 'cancelled';
-
-            // Check if the event is past (after event time + 2 hours)
-            final isPast =
-                eventDateTime != null
-                    ? DateTime.now().isAfter(
-                      eventDateTime.add(const Duration(hours: 2)),
-                    )
-                    : false;
-
             return EventCard(
-              eventId: filteredEvents[index].id,
+              eventId: events[index].id,
               title: event['title'] ?? "Untitled Event",
               description: event['description'] ?? "",
               clubName: event['clubName'] ?? "Unknown Club",
@@ -624,10 +655,13 @@ class _EventsPageState extends State<EventsPage>
               eventDate: eventDateTime,
               participantLimit: event['participantLimit'] ?? 0,
               currentParticipants: event['participants'] ?? 0,
-              isUpcoming: !isPast,
+              isUpcoming: status == 'active',
               isAdmin: true,
-              isCancelled: isCancelled,
-              isPastEvent: isPast,
+              isCancelled: status == 'cancelled',
+              isPastEvent: status == 'past',
+              isTeamEvent: event['isTeamEvent'] ?? false,
+              teamSize: event['teamSize'] ?? 0,
+              teams: List<Map<String, dynamic>>.from(event['teams'] ?? []),
             );
           },
         );
@@ -649,6 +683,9 @@ class EventCard extends StatelessWidget {
   final bool isAdmin;
   final bool isCancelled;
   final bool isPastEvent;
+  final bool isTeamEvent;
+  final int teamSize;
+  final List<Map<String, dynamic>> teams;
 
   const EventCard({
     required this.eventId,
@@ -663,6 +700,9 @@ class EventCard extends StatelessWidget {
     this.isAdmin = false,
     this.isCancelled = false,
     required this.isPastEvent,
+    this.isTeamEvent = false,
+    this.teamSize = 0,
+    this.teams = const [],
     super.key,
   });
 
@@ -733,21 +773,28 @@ class EventCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                  Text(
-                    isCancelled
-                        ? 'Cancelled'
-                        : isUpcoming
-                        ? 'Upcoming'
-                        : 'Past Event',
-                    style: TextStyle(
-                      color:
-                          isCancelled
-                              ? Colors.red
-                              : isUpcoming
-                              ? Colors.green
-                              : Colors.grey,
-                      fontSize: 12,
-                    ),
+                  Row(
+                    children: [
+                      if (isTeamEvent)
+                        const Icon(Icons.groups, size: 16, color: Colors.blue),
+                      const SizedBox(width: 4),
+                      Text(
+                        isCancelled
+                            ? 'Cancelled'
+                            : isUpcoming
+                            ? 'Upcoming'
+                            : 'Past Event',
+                        style: TextStyle(
+                          color:
+                              isCancelled
+                                  ? Colors.red
+                                  : isUpcoming
+                                  ? Colors.green
+                                  : Colors.grey,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -831,7 +878,9 @@ class EventCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          isSpaceLimited
+                          isTeamEvent
+                              ? 'Teams: ${teams.length}/$participantLimit'
+                              : isSpaceLimited
                               ? 'Participants: $currentParticipants/$participantLimit'
                               : 'Participants: $currentParticipants',
                           style: const TextStyle(fontWeight: FontWeight.w500),
@@ -839,7 +888,11 @@ class EventCard extends StatelessWidget {
                         if (isSpaceLimited && isUpcoming && !isCancelled)
                           Text(
                             isFull
-                                ? 'No spaces left'
+                                ? isTeamEvent
+                                    ? 'No team slots left'
+                                    : 'No spaces left'
+                                : isTeamEvent
+                                ? '${participantLimit - teams.length} team slots left'
                                 : '$spacesLeft spaces left',
                             style: TextStyle(
                               color: isFull ? Colors.red : Colors.green,
@@ -849,7 +902,6 @@ class EventCard extends StatelessWidget {
                       ],
                     ),
                   ),
-                  // Only show edit button for upcoming, non-cancelled events that aren't past
                   if (isAdmin && isUpcoming && !isCancelled && !isPastEvent)
                     TextButton.icon(
                       onPressed: () {
@@ -935,6 +987,25 @@ class EventCard extends StatelessWidget {
                               'CANCELLED',
                               style: TextStyle(
                                 color: Colors.red,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        if (isTeamEvent)
+                          Container(
+                            margin: const EdgeInsets.only(top: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Text(
+                              'TEAM EVENT',
+                              style: TextStyle(
+                                color: Colors.blue,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -1047,30 +1118,80 @@ class EventCard extends StatelessWidget {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Text(
-                                    'Participants',
-                                    style: TextStyle(
+                                  Text(
+                                    isTeamEvent ? 'Teams' : 'Participants',
+                                    style: const TextStyle(
                                       fontSize: 14,
                                       fontWeight: FontWeight.bold,
                                     ),
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    participantLimit > 0
+                                    isTeamEvent
+                                        ? '${teams.length}/${participantLimit} teams registered'
+                                        : participantLimit > 0
                                         ? '$currentParticipants/$participantLimit registered'
                                         : '$currentParticipants registered',
                                     style: TextStyle(
                                       color: Colors.grey.shade700,
                                     ),
                                   ),
+                                  if (isTeamEvent)
+                                    Text(
+                                      '${teamSize} members per team',
+                                      style: TextStyle(
+                                        color: Colors.grey.shade700,
+                                        fontSize: 12,
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),
                           ],
                         ),
                         const SizedBox(height: 24),
+                        if (isTeamEvent && teams.isNotEmpty) ...[
+                          const Text(
+                            "Registered Teams",
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          ListView.builder(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: teams.length,
+                            itemBuilder: (context, index) {
+                              final team = teams[index];
+                              return Card(
+                                margin: const EdgeInsets.only(bottom: 8),
+                                child: ListTile(
+                                  title: Text(
+                                    team['teamName'] ?? 'Unnamed Team',
+                                  ),
+                                  subtitle: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text("Captain: ${team['captain']}"),
+                                      const SizedBox(height: 4),
+                                      const Text("Members:"),
+                                      ...(team['members'] as List?)?.map(
+                                            (email) => Text("• $email"),
+                                          ) ??
+                                          [],
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          const SizedBox(height: 16),
+                        ],
                         const Text(
-                          'About this event',
+                          "About this event",
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
@@ -1153,12 +1274,17 @@ class EventCard extends StatelessWidget {
     final participantLimitController = TextEditingController(
       text: participantLimit > 0 ? participantLimit.toString() : '',
     );
+    final teamSizeController = TextEditingController(
+      text: isTeamEvent ? teamSize.toString() : '',
+    );
 
     DateTime? updatedEventDate = eventDate;
     TimeOfDay? updatedEventTime =
         eventDate != null
             ? TimeOfDay(hour: eventDate!.hour, minute: eventDate!.minute)
             : null;
+
+    bool updatedIsTeamEvent = isTeamEvent;
 
     showDialog(
       context: context,
@@ -1216,6 +1342,35 @@ class EventCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 15),
+                    SwitchListTile(
+                      title: const Text("Team Event"),
+                      value: updatedIsTeamEvent,
+                      onChanged:
+                          (value) => setState(() => updatedIsTeamEvent = value),
+                    ),
+                    if (updatedIsTeamEvent) ...[
+                      const SizedBox(height: 15),
+                      TextField(
+                        controller: teamSizeController,
+                        keyboardType: TextInputType.number,
+                        decoration: _inputDecoration(
+                          "Team Size (members per team)",
+                          Icons.group_add,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 15),
+                    TextField(
+                      controller: participantLimitController,
+                      keyboardType: TextInputType.number,
+                      decoration: _inputDecoration(
+                        updatedIsTeamEvent
+                            ? "Maximum Teams"
+                            : "Participant Limit",
+                        Icons.people,
+                      ),
+                    ),
+                    const SizedBox(height: 15),
                     _buildDatePickerRow(
                       context,
                       "Event Date",
@@ -1233,20 +1388,13 @@ class EventCard extends StatelessWidget {
                       (time) => setState(() => updatedEventTime = time),
                       Icons.access_time,
                     ),
-                    const SizedBox(height: 15),
-                    TextField(
-                      controller: participantLimitController,
-                      keyboardType: TextInputType.number,
-                      decoration: _inputDecoration(
-                        "Participant Limit (0 for unlimited)",
-                        Icons.people,
-                      ),
-                    ),
                     if (currentParticipants > 0)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(
-                          'Note: $currentParticipants people have already registered',
+                          updatedIsTeamEvent
+                              ? 'Note: ${teams.length} teams have already registered'
+                              : 'Note: $currentParticipants people have already registered',
                           style: TextStyle(
                             color: Colors.orange.shade800,
                             fontSize: 12,
@@ -1280,6 +1428,19 @@ class EventCard extends StatelessWidget {
                       return;
                     }
 
+                    if (updatedIsTeamEvent &&
+                        (teamSizeController.text.isEmpty ||
+                            int.tryParse(teamSizeController.text) == null ||
+                            int.parse(teamSizeController.text) < 2)) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("Team size must be at least 2 members"),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                      return;
+                    }
+
                     final newEventDateTime = DateTime(
                       updatedEventDate!.year,
                       updatedEventDate!.month,
@@ -1290,16 +1451,34 @@ class EventCard extends StatelessWidget {
 
                     final parsedLimit =
                         int.tryParse(participantLimitController.text) ?? 0;
-                    if (parsedLimit > 0 && parsedLimit < currentParticipants) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            "Participant limit cannot be less than current participants",
+                    final parsedTeamSize =
+                        int.tryParse(teamSizeController.text) ?? 0;
+
+                    if (updatedIsTeamEvent) {
+                      if (parsedLimit < teams.length) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              "Team limit cannot be less than current registered teams",
+                            ),
+                            backgroundColor: Colors.red,
                           ),
-                          backgroundColor: Colors.red,
-                        ),
-                      );
-                      return;
+                        );
+                        return;
+                      }
+                    } else {
+                      if (parsedLimit > 0 &&
+                          parsedLimit < currentParticipants) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              "Participant limit cannot be less than current participants",
+                            ),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                        return;
+                      }
                     }
 
                     try {
@@ -1312,6 +1491,8 @@ class EventCard extends StatelessWidget {
                             'location': locationController.text,
                             'eventDateTime': newEventDateTime.toIso8601String(),
                             'participantLimit': parsedLimit,
+                            'isTeamEvent': updatedIsTeamEvent,
+                            if (updatedIsTeamEvent) 'teamSize': parsedTeamSize,
                             'lastUpdatedAt': DateTime.now().toIso8601String(),
                           });
 
@@ -1580,5 +1761,148 @@ class EventCard extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class TeamRegistrationDialog extends StatefulWidget {
+  final String eventId;
+  final int teamSize;
+
+  const TeamRegistrationDialog({
+    required this.eventId,
+    required this.teamSize,
+    super.key,
+  });
+
+  @override
+  State<TeamRegistrationDialog> createState() => _TeamRegistrationDialogState();
+}
+
+class _TeamRegistrationDialogState extends State<TeamRegistrationDialog> {
+  final List<TextEditingController> _memberControllers = [];
+  final _teamNameController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Initialize controllers for each team member
+    for (int i = 0; i < widget.teamSize; i++) {
+      _memberControllers.add(TextEditingController());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text("Register Team"),
+      content: SingleChildScrollView(
+        child: Column(
+          children: [
+            TextField(
+              controller: _teamNameController,
+              decoration: const InputDecoration(labelText: "Team Name"),
+            ),
+            const SizedBox(height: 16),
+            ...List.generate(widget.teamSize, (index) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: TextField(
+                  controller: _memberControllers[index],
+                  decoration: InputDecoration(
+                    labelText: "Member ${index + 1} Email",
+                    hintText: "Enter member's registered email",
+                  ),
+                  keyboardType: TextInputType.emailAddress,
+                ),
+              );
+            }),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text("Cancel"),
+        ),
+        ElevatedButton(onPressed: _registerTeam, child: const Text("Register")),
+      ],
+    );
+  }
+
+  Future<void> _registerTeam() async {
+    final teamName = _teamNameController.text.trim();
+    if (teamName.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Please enter a team name")));
+      return;
+    }
+
+    // Verify all member emails
+    final memberEmails =
+        _memberControllers
+            .map((c) => c.text.trim())
+            .where((email) => email.isNotEmpty)
+            .toList();
+
+    if (memberEmails.length != widget.teamSize) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Please provide all ${widget.teamSize} member emails"),
+        ),
+      );
+      return;
+    }
+
+    // Verify members exist in users collection
+    try {
+      final users =
+          await FirebaseFirestore.instance
+              .collection('users')
+              .where('email', whereIn: memberEmails)
+              .get();
+
+      if (users.docs.length != memberEmails.length) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Some members are not registered users"),
+          ),
+        );
+        return;
+      }
+
+      // Add team to event
+      await FirebaseFirestore.instance
+          .collection('events')
+          .doc(widget.eventId)
+          .update({
+            'teams': FieldValue.arrayUnion([
+              {
+                'teamName': teamName,
+                'members': memberEmails,
+                'captain': FirebaseAuth.instance.currentUser!.email,
+                'registeredAt': FieldValue.serverTimestamp(),
+              },
+            ]),
+          });
+
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Team registered successfully!")),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Error registering team: $e")));
+    }
+  }
+
+  @override
+  void dispose() {
+    _teamNameController.dispose();
+    for (var controller in _memberControllers) {
+      controller.dispose();
+    }
+    super.dispose();
   }
 }
