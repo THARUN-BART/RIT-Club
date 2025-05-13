@@ -1,18 +1,16 @@
-import 'dart:io';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:rit_club/pages/About.dart';
 import 'package:rit_club/pages/Admin/admin_events.dart';
-import 'package:rit_club/pages/Admin/FeedBack.dart';
 import 'package:rit_club/pages/Admin/participants.dart';
 
 import '../../Authentication/login.dart';
+import '../About.dart';
 import 'Announcement.dart';
+import 'FeedBack.dart';
+import 'gdrive.dart';
 
 class ClubCreationPage extends StatefulWidget {
   const ClubCreationPage({super.key});
@@ -35,8 +33,7 @@ class _ClubCreationPageState extends State<ClubCreationPage> {
     'Talent Showcase',
   ];
 
-  File? _imageFile;
-  final picker = ImagePicker();
+  String? _gdriveImageUrl;
   bool _isUploading = false;
   bool _isCheckingName = false;
   String _uploadStatus = '';
@@ -73,32 +70,17 @@ class _ClubCreationPageState extends State<ClubCreationPage> {
     }
   }
 
-  Future<void> _pickImage() async {
-    try {
-      if (Platform.isAndroid || Platform.isIOS) {
-        var status = await Permission.photos.request();
-        if (status.isDenied || status.isPermanentlyDenied) {
-          _showSnackBar(
-            "Storage permission is required. Please enable it in settings.",
-          );
-          openAppSettings();
-          return;
-        }
-      }
+  Future<void> _pickGDriveImage() async {
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => const GDriveImagePickerDialog(),
+    );
 
-      final pickedFile = await picker.pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 75,
-      );
-
-      if (pickedFile != null) {
-        setState(() {
-          _imageFile = File(pickedFile.path);
-          _uploadStatus = 'Image selected successfully';
-        });
-      }
-    } catch (e) {
-      _showSnackBar("Error picking image: ${e.toString()}");
+    if (result != null) {
+      setState(() {
+        _gdriveImageUrl = result;
+        _uploadStatus = 'Google Drive image selected successfully';
+      });
     }
   }
 
@@ -136,82 +118,31 @@ class _ClubCreationPageState extends State<ClubCreationPage> {
         return;
       }
 
-      String? imageUrl;
-
-      if (_imageFile != null) {
-        setState(() {
-          _uploadStatus = 'Uploading image...';
-        });
-
-        String fileName =
-            '${DateTime.now().millisecondsSinceEpoch}_${user.uid}';
-        Reference ref = FirebaseStorage.instance
-            .ref()
-            .child('club_images')
-            .child(fileName);
-
-        UploadTask uploadTask = ref.putFile(_imageFile!);
-
-        uploadTask.snapshotEvents.listen((TaskSnapshot snapshot) {
-          double progress = snapshot.bytesTransferred / snapshot.totalBytes;
-          setState(() {
-            _uploadStatus =
-                'Uploading: ${(progress * 100).toStringAsFixed(2)}%';
-          });
-        });
-
-        TaskSnapshot snapshot = await uploadTask;
-        imageUrl = await snapshot.ref.getDownloadURL();
-      }
-
-      setState(() {
-        _uploadStatus = 'Saving club information...';
-      });
-
-      DocumentReference clubRef = await FirebaseFirestore.instance
-          .collection('clubs')
-          .add({
-            'name': clubName,
-            'description': _descriptionController.text.trim(),
-            'category': _selectedCategory,
-            'imageUrl': imageUrl ?? '',
-            'createdAt': FieldValue.serverTimestamp(),
-            'createdBy': user.email,
-            'adminIds': user.uid,
-            'memberCount': 0,
-            'followers': [],
-          });
-
-      await clubRef.collection('events').add({
-        'name': 'Welcome to $clubName',
-        'description':
-            'This is your first club event. Edit or delete as needed.',
-        'date': DateTime.now().add(const Duration(days: 7)),
+      await FirebaseFirestore.instance.collection('clubs').add({
+        'name': clubName,
+        'description': _descriptionController.text.trim(),
+        'category': _selectedCategory,
+        'imageUrl': _gdriveImageUrl ?? '',
         'createdAt': FieldValue.serverTimestamp(),
-        'location': 'TBD',
-        'participants': [],
+        'createdBy': user.email,
+        'adminIds': user.uid,
+        'memberCount': 0,
+        'followers': [],
       });
-
-      // Store the current club ID in shared preferences
-      await _saveCurrentClub(clubRef.id, clubName);
 
       _showSnackBar("Club created successfully!");
 
       _clubNameController.clear();
       _descriptionController.clear();
       setState(() {
-        _imageFile = null;
+        _gdriveImageUrl = null;
         _uploadStatus = '';
       });
 
       if (context.mounted) {
-        if (Navigator.of(context).canPop()) {
-          Navigator.of(context).pop(true);
-        } else {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (context) => const AdminHome()),
-          );
-        }
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => const AdminHome()),
+        );
       }
     } catch (e) {
       print("Error uploading club: $e");
@@ -223,14 +154,6 @@ class _ClubCreationPageState extends State<ClubCreationPage> {
         });
       }
     }
-  }
-
-  // Function to save the current club to shared preferences
-  Future<void> _saveCurrentClub(String clubId, String clubName) async {
-    // You'll need to import the shared_preferences package
-    // For now, store the values in a static variable or use another state management solution
-    AdminHome.currentClubId = clubId;
-    AdminHome.currentClubName = clubName;
   }
 
   void _showSnackBar(String message) {
@@ -293,9 +216,7 @@ class _ClubCreationPageState extends State<ClubCreationPage> {
                   _categories.map((String category) {
                     return DropdownMenuItem<String>(
                       value: category,
-                      child: Text(
-                        category[0].toUpperCase() + category.substring(1),
-                      ),
+                      child: Text(category),
                     );
                   }).toList(),
               onChanged: (String? newValue) {
@@ -322,89 +243,41 @@ class _ClubCreationPageState extends State<ClubCreationPage> {
                       value!.isEmpty ? 'Please enter a description' : null,
             ),
             const SizedBox(height: 16),
-            Container(
-              height: 200,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child:
-                  _imageFile != null
-                      ? Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          Image.file(_imageFile!, fit: BoxFit.cover),
-                          Positioned(
-                            right: 8,
-                            top: 8,
-                            child: IconButton(
-                              icon: const Icon(
-                                Icons.close,
-                                color: Colors.white,
-                              ),
-                              onPressed: () {
-                                setState(() {
-                                  _imageFile = null;
-                                });
-                              },
-                              style: IconButton.styleFrom(
-                                backgroundColor: Colors.black54,
-                              ),
-                            ),
-                          ),
-                        ],
-                      )
-                      : Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(
-                              Icons.image,
-                              size: 50,
-                              color: Colors.grey,
-                            ),
-                            const SizedBox(height: 10),
-                            const Text("No image selected"),
-                            TextButton.icon(
-                              onPressed: _pickImage,
-                              icon: const Icon(Icons.add_photo_alternate),
-                              label: const Text("Select Image (Optional)"),
-                            ),
-                          ],
-                        ),
-                      ),
+            _gdriveImageUrl != null
+                ? Column(
+                  children: [
+                    Image.network(
+                      _gdriveImageUrl!,
+                      height: 200,
+                      fit: BoxFit.cover,
+                    ),
+                    TextButton.icon(
+                      onPressed: () {
+                        setState(() {
+                          _gdriveImageUrl = null;
+                        });
+                      },
+                      icon: const Icon(Icons.delete),
+                      label: const Text("Remove Image"),
+                    ),
+                  ],
+                )
+                : TextButton.icon(
+                  onPressed: _pickGDriveImage,
+                  icon: const Icon(Icons.cloud_upload),
+                  label: const Text("Upload Image from Google Drive"),
+                ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: _isUploading ? null : _uploadClub,
+              icon: const Icon(Icons.cloud_upload),
+              label: const Text("Create Club"),
             ),
             if (_uploadStatus.isNotEmpty)
               Padding(
-                padding: const EdgeInsets.only(top: 8.0),
-                child: Text(
-                  _uploadStatus,
-                  style: const TextStyle(color: Colors.blue),
-                ),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Center(child: Text(_uploadStatus)),
               ),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: (_isUploading || _isCheckingName) ? null : _uploadClub,
-              icon: const Icon(Icons.cloud_upload),
-              label:
-                  _isUploading
-                      ? const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                          SizedBox(width: 8),
-                          Text("Creating Club..."),
-                        ],
-                      )
-                      : const Text("Create Club"),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-              ),
-            ),
           ],
         ),
       ),
@@ -523,8 +396,9 @@ class _AdminHomeState extends State<AdminHome> {
         appBar: AppBar(
           title: const Text(
             "Club Admin Dashboard",
-            style: TextStyle(fontSize: 20),
+            style: TextStyle(fontSize: 20, color: Colors.orangeAccent),
           ),
+          centerTitle: true,
         ),
         body: const Center(child: CircularProgressIndicator()),
       );
@@ -570,7 +444,6 @@ class _AdminHomeState extends State<AdminHome> {
         ),
         centerTitle: true,
         actions: [
-          // Add club dropdown if user has multiple clubs
           if (_userClubs.length > 1)
             PopupMenuButton<String>(
               icon: const Icon(Icons.swap_horiz),
@@ -709,11 +582,10 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   bool _isLoading = true;
   final TextEditingController _editNameController = TextEditingController();
   final TextEditingController _editDescController = TextEditingController();
+  final TextEditingController _editImageUrlController = TextEditingController();
   String _editCategory = 'Social Service';
-  File? _editImageFile;
   bool _isEditing = false;
   String? _editingClubId;
-  String? _currentImageUrl;
   List<String> _followers = [];
   bool _isLoadingFollowers = false;
 
@@ -728,7 +600,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
 
-      // If we have a current club ID, load just that club
       if (AdminHome.currentClubId.isNotEmpty) {
         final docSnapshot =
             await FirebaseFirestore.instance
@@ -741,14 +612,11 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
             _clubs = [docSnapshot];
             _isLoading = false;
           });
-
-          // Load followers for the current club
           _loadClubFollowers();
           return;
         }
       }
 
-      // Otherwise, load all clubs
       final querySnapshot =
           await FirebaseFirestore.instance
               .collection('clubs')
@@ -759,7 +627,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
         _clubs = querySnapshot.docs;
         _isLoading = false;
 
-        // If clubs were found and current club ID isn't set
         if (_clubs.isNotEmpty && AdminHome.currentClubId.isEmpty) {
           AdminHome.currentClubId = _clubs[0].id;
           final data = _clubs[0].data() as Map<String, dynamic>;
@@ -767,7 +634,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
         }
       });
 
-      // Load followers for the current club
       _loadClubFollowers();
     } catch (e) {
       print("Error loading clubs: $e");
@@ -821,7 +687,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: Text("User Details"),
+          title: const Text("User Details"),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -852,8 +718,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
       if (querySnapshot.docs.isNotEmpty) {
         DocumentSnapshot userDoc = querySnapshot.docs.first;
-
-        // Pass the actual DocumentSnapshot directly
         _showUserDetailsDialog(userDoc);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -876,25 +740,21 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       _editNameController.text = data['name'] ?? '';
       _editDescController.text = data['description'] ?? '';
       _editCategory = data['category'] ?? 'Social Service';
-      _currentImageUrl = data['imageUrl'];
+      _editImageUrlController.text =
+          convertGoogleDriveLink(data['imageUrl']) ?? '';
     });
   }
 
   Future<void> _pickEditImage() async {
-    try {
-      final pickedFile = await ImagePicker().pickImage(
-        source: ImageSource.gallery,
-      );
-      if (pickedFile != null) {
-        setState(() {
-          _editImageFile = File(pickedFile.path);
-          _currentImageUrl = null;
-        });
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error picking image: ${e.toString()}")),
-      );
+    final imageUrl = await showDialog<String>(
+      context: context,
+      builder: (context) => const GDriveImagePickerDialog(),
+    );
+
+    if (imageUrl != null) {
+      setState(() {
+        _editImageUrlController.text = imageUrl;
+      });
     }
   }
 
@@ -914,33 +774,11 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null || _editingClubId == null) return;
 
-      String? imageUrl = _currentImageUrl;
+      String? imageUrl =
+          _editImageUrlController.text.trim().isNotEmpty
+              ? _editImageUrlController.text.trim()
+              : null;
 
-      // Handling image upload
-      if (_editImageFile != null) {
-        final fileName = '${DateTime.now().millisecondsSinceEpoch}_${user.uid}';
-        final ref = FirebaseStorage.instance
-            .ref()
-            .child('club_images')
-            .child(fileName);
-
-        try {
-          await ref.putFile(_editImageFile!);
-          imageUrl = await ref.getDownloadURL();
-        } catch (uploadError) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text("Error uploading image: ${uploadError.toString()}"),
-            ),
-          );
-          setState(() {
-            _isLoading = false;
-          });
-          return; // Stop further execution if upload fails
-        }
-      }
-
-      // Updating the Firestore document
       await FirebaseFirestore.instance
           .collection('clubs')
           .doc(_editingClubId)
@@ -951,7 +789,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
             if (imageUrl != null) 'imageUrl': imageUrl,
           });
 
-      // Update current club name if this is the active club
       if (_editingClubId == AdminHome.currentClubId) {
         AdminHome.currentClubName = _editNameController.text.trim();
       }
@@ -969,8 +806,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       setState(() {
         _isEditing = false;
         _editingClubId = null;
-        _editImageFile = null;
-        _currentImageUrl = null;
         _isLoading = false;
       });
     }
@@ -980,8 +815,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     setState(() {
       _isEditing = false;
       _editingClubId = null;
-      _editImageFile = null;
-      _currentImageUrl = null;
+      _editImageUrlController.clear();
     });
   }
 
@@ -1035,73 +869,91 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
             maxLines: 3,
           ),
           const SizedBox(height: 16),
-          Container(
-            height: 200,
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey),
-              borderRadius: BorderRadius.circular(8),
+          TextFormField(
+            controller: _editImageUrlController,
+            decoration: InputDecoration(
+              labelText: 'Google Drive Image URL',
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.link),
+                onPressed: _pickEditImage,
+              ),
             ),
-            child:
-                _editImageFile != null
-                    ? Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        Image.file(_editImageFile!, fit: BoxFit.cover),
-                        Positioned(
-                          right: 8,
-                          top: 8,
-                          child: IconButton(
-                            icon: const Icon(Icons.close, color: Colors.white),
-                            onPressed: () {
-                              setState(() {
-                                _editImageFile = null;
-                              });
-                            },
-                            style: IconButton.styleFrom(
-                              backgroundColor: Colors.black54,
-                            ),
+          ),
+          const SizedBox(height: 16),
+          if (_editImageUrlController.text.isNotEmpty)
+            Container(
+              height: 200,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.network(
+                    _editImageUrlController.text,
+                    fit: BoxFit.cover,
+                    errorBuilder:
+                        (context, error, stackTrace) => Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(
+                                Icons.error,
+                                color: Colors.red,
+                                size: 50,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Invalid image URL',
+                                style: TextStyle(color: Colors.red[700]),
+                              ),
+                            ],
                           ),
                         ),
-                      ],
-                    )
-                    : _currentImageUrl != null
-                    ? Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        Image.network(_currentImageUrl!, fit: BoxFit.cover),
-                        Positioned(
-                          right: 8,
-                          top: 8,
-                          child: IconButton(
-                            icon: const Icon(Icons.close, color: Colors.white),
-                            onPressed: () {
-                              setState(() {
-                                _currentImageUrl = null;
-                              });
-                            },
-                            style: IconButton.styleFrom(
-                              backgroundColor: Colors.black54,
-                            ),
-                          ),
-                        ),
-                      ],
-                    )
-                    : Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.image, size: 50, color: Colors.grey),
-                          const SizedBox(height: 10),
-                          const Text("No image selected"),
-                          TextButton.icon(
-                            onPressed: _pickEditImage,
-                            icon: const Icon(Icons.add_photo_alternate),
-                            label: const Text("Select Image"),
-                          ),
-                        ],
+                  ),
+                  Positioned(
+                    right: 8,
+                    top: 8,
+                    child: IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () {
+                        setState(() {
+                          _editImageUrlController.clear();
+                        });
+                      },
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.black54,
                       ),
                     ),
-          ),
+                  ),
+                ],
+              ),
+            )
+          else
+            Container(
+              height: 200,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.image, size: 50, color: Colors.grey),
+                    const SizedBox(height: 10),
+                    const Text("No image selected"),
+                    TextButton.icon(
+                      onPressed: _pickEditImage,
+                      icon: const Icon(Icons.add_photo_alternate),
+                      label: const Text("Select from Google Drive"),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           const SizedBox(height: 20),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -1172,7 +1024,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       );
     }
 
-    // Get the current club
     final currentClub = _clubs.firstWhere(
       (club) => club.id == AdminHome.currentClubId,
       orElse: () => _clubs[0],
@@ -1182,7 +1033,9 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     final clubName = clubData['name'] ?? 'Unknown Club';
     final clubDescription = clubData['description'] ?? 'No description';
     final clubCategory = clubData['category'] ?? 'Uncategorized';
-    final clubImageUrl = clubData['imageUrl'];
+    final clubImageUrl = convertGoogleDriveLink(
+      clubData['imageUrl'].toString(),
+    );
     final memberCount = clubData['memberCount'] ?? 0;
 
     return SingleChildScrollView(
@@ -1202,23 +1055,15 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                     borderRadius: const BorderRadius.vertical(
                       top: Radius.circular(12),
                     ),
-                    child: Image.network(
-                      clubImageUrl,
-                      height: 200,
+                    child: CachedNetworkImage(
+                      imageUrl: clubImageUrl,
+                      height: 250,
                       width: double.infinity,
-                      fit: BoxFit.cover,
-                      errorBuilder:
-                          (context, error, stackTrace) => Container(
-                            height: 200,
-                            color: Colors.grey[300],
-                            child: const Center(
-                              child: Icon(
-                                Icons.error,
-                                size: 50,
-                                color: Colors.red,
-                              ),
-                            ),
-                          ),
+                      placeholder:
+                          (context, url) => CircularProgressIndicator(),
+                      errorWidget:
+                          (context, url, error) =>
+                              Icon(Icons.error, color: Colors.red, size: 50),
                     ),
                   ),
                 Padding(
@@ -1274,13 +1119,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
             ),
-          ),
-          const SizedBox(height: 24),
-          Card(
-            elevation: 4,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -1328,10 +1166,21 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     );
   }
 
+  String? convertGoogleDriveLink(String url) {
+    final RegExp regex = RegExp(
+      r'https:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)',
+    );
+    final match = regex.firstMatch(url);
+    return match != null
+        ? 'https://drive.google.com/uc?export=view&id=${match.group(1)}'
+        : null;
+  }
+
   @override
   void dispose() {
     _editNameController.dispose();
     _editDescController.dispose();
+    _editImageUrlController.dispose();
     super.dispose();
   }
 }

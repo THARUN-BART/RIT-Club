@@ -37,8 +37,11 @@ class _SignUpState extends State<SignUp> {
     'bioTech': ['A'],
   };
 
+  // Updated regex to support both formats:
+  // 1. name.123456@dept.ritchennai.edu.in
+  // 2. name.b.2023.dept@ritchennai.edu.in
   final RegExp emailRegex = RegExp(
-    r'^[a-zA-Z]+\.[0-9]{6}@([a-z]+)\.ritchennai\.edu\.in$',
+    r'^[a-zA-Z.]+\.[a-zA-Z0-9.]+@([a-z]+)\.ritchennai\.edu\.in$',
   );
 
   void _showMessage(String title, String message) {
@@ -58,26 +61,65 @@ class _SignUpState extends State<SignUp> {
     );
   }
 
+  // Helper method to extract department from email
+  String? _extractDepartmentFromEmail(String email) {
+    final match = emailRegex.firstMatch(email);
+    if (match == null) return null;
+
+    final domainPart = match.group(1); // This gets the department part
+
+    // Check if the email format is lokesh.b.2023.cse@ritchennai.edu.in
+    if (email.split('.').length > 2) {
+      final parts = email.split('@')[0].split('.');
+      if (parts.length >= 3) {
+        // Try to extract department from the last part before @
+        final possibleDept = parts.last.toLowerCase();
+        if (departmentSections.containsKey(possibleDept)) {
+          return possibleDept;
+        }
+      }
+    }
+
+    // Default to the domain part (for format: name.123456@dept.ritchennai.edu.in)
+    return domainPart;
+  }
+
   Future<void> _sendVerification() async {
     final email = _emailController.text.trim();
 
-    final match = emailRegex.firstMatch(email);
-    if (match == null) {
+    if (!emailRegex.hasMatch(email)) {
       _showMessage(
         "Invalid Email",
-        "Use your institutional email (abc.123456@dept.ritchennai.edu.in).",
+        "Use your institutional email (e.g., abc.123456@dept.ritchennai.edu.in or name.b.2023.dept@ritchennai.edu.in).",
       );
       return;
     }
 
-    final dept = match.group(1); // captured department from email
-    if (!departmentSections.containsKey(dept)) {
+    final dept = _extractDepartmentFromEmail(email);
+    if (dept == null || !departmentSections.containsKey(dept)) {
       _showMessage("Invalid Dept", "Email contains unknown department.");
       return;
     }
 
     try {
       setState(() => _isLoading = true);
+
+      // Check if user already exists
+      try {
+        final methods = await FirebaseAuth.instance.fetchSignInMethodsForEmail(
+          email,
+        );
+        if (methods.isNotEmpty) {
+          _showMessage(
+            "Account Exists",
+            "An account with this email already exists. Please sign in instead.",
+          );
+          setState(() => _isLoading = false);
+          return;
+        }
+      } catch (e) {
+        // Continue with signup if error checking existing user
+      }
 
       await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: email,
@@ -183,6 +225,7 @@ class _SignUpState extends State<SignUp> {
               enabled: !_isVerificationSent,
               decoration: const InputDecoration(
                 labelText: 'Institutional Email',
+                hintText: 'name.123456@dept.ritchennai.edu.in',
                 icon: Icon(Icons.email),
                 border: OutlineInputBorder(),
               ),

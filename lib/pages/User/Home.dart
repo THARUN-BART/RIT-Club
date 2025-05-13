@@ -7,7 +7,7 @@ import 'package:rit_club/pages/About.dart';
 import 'package:rit_club/pages/User/ClubAnouncement.dart';
 import 'package:rit_club/pages/User/EventPage.dart';
 import 'package:rit_club/pages/User/status_page.dart';
-
+import 'package:cached_network_image/cached_network_image.dart';
 import 'notification.dart';
 import 'notification_batch.dart';
 
@@ -43,15 +43,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   // Pages for bottom navigation
   final List<Widget> _pages = [];
 
-  void _logout() async {
-    await FirebaseAuth.instance.signOut();
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (context) => const Login()),
-      (route) => false,
-    );
-  }
-
   @override
   void initState() {
     super.initState();
@@ -59,7 +50,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     _userEmail = user?.email;
     _fetchUserData();
     _fetchClubs().then((_) {
-      // Initialize pages after data is loaded
       setState(() {
         _pages.addAll([
           _buildHomeContent(),
@@ -74,6 +64,15 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   void dispose() {
     _tabController.dispose();
     super.dispose();
+  }
+
+  void _logout() async {
+    await FirebaseAuth.instance.signOut();
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (context) => const Login()),
+      (route) => false,
+    );
   }
 
   void _onItemTapped(int index) {
@@ -102,31 +101,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
-  // Helper method to organize followed clubs by category
-  void _organizeFollowedClubsByCategory() {
-    Map<String, List<Map<String, dynamic>>> categorized = {};
-
-    // Initialize all categories to ensure they appear even if empty
-    for (var category in predefinedCategories) {
-      categorized[category] = [];
-    }
-
-    // Sort followed clubs into categories
-    for (var club in _followedClubs) {
-      String category = club['category'] ?? '';
-      if (predefinedCategories.contains(category)) {
-        categorized[category]!.add(club);
-      }
-    }
-
-    // Remove empty categories
-    categorized.removeWhere((key, value) => value.isEmpty);
-
-    setState(() {
-      _followedClubsByCategory = categorized;
-    });
-  }
-
   Future<void> _fetchClubs() async {
     setState(() {
       _isLoading = true;
@@ -134,73 +108,58 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     });
 
     try {
-      bool clubsCollectionExists = await _checkCollectionExists('clubs');
+      QuerySnapshot clubSnapshot =
+          await FirebaseFirestore.instance
+              .collection('clubs')
+              .orderBy('name')
+              .get();
 
-      if (clubsCollectionExists) {
-        QuerySnapshot clubSnapshot =
-            await FirebaseFirestore.instance
-                .collection('clubs')
-                .orderBy('name')
-                .get();
+      List<Map<String, dynamic>> clubs = [];
+      Map<String, List<Map<String, dynamic>>> categorizedClubs = {};
 
-        List<Map<String, dynamic>> clubs = [];
-        Map<String, List<Map<String, dynamic>>> categorizedClubs = {};
-
-        // Initialize all predefined categories
-        for (var category in predefinedCategories) {
-          categorizedClubs[category] = [];
-        }
-
-        for (var doc in clubSnapshot.docs) {
-          Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
-          String category = data['category'] ?? '';
-
-          // Only include clubs with predefined categories
-          if (predefinedCategories.contains(category)) {
-            // Ensure followers is initialized
-            List<String> followers = [];
-            if (data.containsKey('followers')) {
-              followers = List<String>.from(data['followers']);
-            }
-
-            // Make sure memberCount matches followers array length
-            int memberCount = followers.length;
-
-            Map<String, dynamic> clubData = {
-              'id': doc.id,
-              'name': data['name'] ?? 'Unknown Club',
-              'description': data['description'] ?? 'No description available',
-              'image': data['imageUrl'] ?? 'assets/default_club.png',
-              'memberCount': memberCount,
-              'category': category,
-              'followers': followers, // Store followers array for easy checking
-            };
-
-            clubs.add(clubData);
-            categorizedClubs[category]!.add(clubData);
-          }
-        }
-
-        // Remove empty categories
-        categorizedClubs.removeWhere((key, value) => value.isEmpty);
-
-        setState(() {
-          _allClubs = clubs;
-          _clubsByCategory = categorizedClubs;
-        });
+      // Initialize all predefined categories
+      for (var category in predefinedCategories) {
+        categorizedClubs[category] = [];
       }
 
-      // Now determine which clubs are followed
-      List<Map<String, dynamic>> followed = [];
+      for (var doc in clubSnapshot.docs) {
+        Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+        String category = data['category'] ?? '';
 
-      if (user != null && _userEmail != null) {
-        // For each club, check if user's email is in the followers array
-        for (var club in _allClubs) {
+        if (predefinedCategories.contains(category)) {
           List<String> followers = [];
-          if (club.containsKey('followers')) {
-            followers = List<String>.from(club['followers']);
+          if (data.containsKey('followers')) {
+            followers = List<String>.from(data['followers']);
           }
 
+          Map<String, dynamic> clubData = {
+            'id': doc.id,
+            'name': data['name'] ?? 'Unknown Club',
+            'description': data['description'] ?? 'No description available',
+            'imageUrl': data['imageUrl'] ?? '', // Use imageUrl from database
+            'memberCount': followers.length,
+            'category': category,
+            'followers': followers,
+          };
+
+          clubs.add(clubData);
+          categorizedClubs[category]!.add(clubData);
+        }
+      }
+
+      // Remove empty categories
+      categorizedClubs.removeWhere((key, value) => value.isEmpty);
+
+      setState(() {
+        _allClubs = clubs;
+        _clubsByCategory = categorizedClubs;
+      });
+
+      // Determine which clubs are followed
+      List<Map<String, dynamic>> followed = [];
+      if (user != null && _userEmail != null) {
+        for (var club in _allClubs) {
+          List<String> followers = List<String>.from(club['followers'] ?? []);
           if (followers.contains(_userEmail)) {
             followed.add(Map<String, dynamic>.from(club));
           }
@@ -212,7 +171,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         _isLoading = false;
       });
 
-      // Organize followed clubs by category
       _organizeFollowedClubsByCategory();
     } catch (e) {
       print('Error fetching clubs: $e');
@@ -223,243 +181,192 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     }
   }
 
-  Future<bool> _checkCollectionExists(String collectionName) async {
-    try {
-      QuerySnapshot snapshot =
-          await FirebaseFirestore.instance
-              .collection(collectionName)
-              .limit(1)
-              .get();
-      return snapshot.docs.isNotEmpty;
-    } catch (e) {
-      return false;
+  void _organizeFollowedClubsByCategory() {
+    Map<String, List<Map<String, dynamic>>> categorized = {};
+    for (var category in predefinedCategories) {
+      categorized[category] = [];
     }
+
+    for (var club in _followedClubs) {
+      String category = club['category'] ?? '';
+      if (predefinedCategories.contains(category)) {
+        categorized[category]!.add(club);
+      }
+    }
+
+    categorized.removeWhere((key, value) => value.isEmpty);
+
+    setState(() {
+      _followedClubsByCategory = categorized;
+    });
   }
 
   Future<void> _toggleFollowClub(
     String clubId,
     bool isCurrentlyFollowing,
   ) async {
-    if (user == null || _userEmail == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please log in to follow clubs')),
-      );
-      return;
-    }
+    if (user == null || _userEmail == null) return;
 
     try {
-      // Get current club data to check actual follow status
       final clubRef = FirebaseFirestore.instance
           .collection('clubs')
           .doc(clubId);
       DocumentSnapshot clubDoc = await clubRef.get();
 
-      if (!clubDoc.exists) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Club not found'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
+      if (!clubDoc.exists) return;
 
       Map<String, dynamic> clubData = clubDoc.data() as Map<String, dynamic>;
       String clubName = clubData['name'] ?? 'Unknown Club';
-      List<String> clubFollowers = [];
+      List<String> clubFollowers = List<String>.from(
+        clubData['followers'] ?? [],
+      );
 
-      if (clubData.containsKey('followers')) {
-        clubFollowers = List<String>.from(clubData['followers']);
-      }
-
-      // Check if user is actually following based on database
       bool isActuallyFollowing = clubFollowers.contains(_userEmail);
-
-      // If UI state doesn't match database state, use database state
       if (isCurrentlyFollowing != isActuallyFollowing) {
         isCurrentlyFollowing = isActuallyFollowing;
       }
 
-      // Show immediate feedback
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 1),
-          content: Text(
-            isCurrentlyFollowing
-                ? 'Unfollowing $clubName'
-                : 'Following $clubName',
-          ),
-          backgroundColor: isCurrentlyFollowing ? Colors.red : Colors.green,
-        ),
-      );
-
-      // Get current user data
-      final userRef = FirebaseFirestore.instance
-          .collection('users')
-          .doc(user!.uid);
-      DocumentSnapshot userDoc = await userRef.get();
-      Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
-
-      // Initialize or get followed clubs data
-      List<String> followedClubIds = [];
-      Map<String, String> followedClubNames = {};
-
-      if (userData.containsKey('followedClubs')) {
-        followedClubIds = List<String>.from(userData['followedClubs']);
-      }
-      if (userData.containsKey('followedClubNames')) {
-        followedClubNames = Map<String, String>.from(
-          userData['followedClubNames'],
-        );
-      }
-
-      // Batch update to ensure atomic operation
-      final batch = FirebaseFirestore.instance.batch();
-
-      if (isCurrentlyFollowing) {
-        // UNFOLLOW: Remove the club ID and name from user document
-        followedClubIds.remove(clubId);
-        followedClubNames.remove(clubId);
-
-        // Remove user email from club's followers list
-        clubFollowers.remove(_userEmail);
-      } else {
-        // FOLLOW: Add club ID and name to user document if not already present
-        if (!followedClubIds.contains(clubId)) {
-          followedClubIds.add(clubId);
-          followedClubNames[clubId] = clubName;
-        }
-
-        // Add user email to club's followers list if not already present
-        if (!clubFollowers.contains(_userEmail)) {
+      // Update UI immediately
+      setState(() {
+        if (isCurrentlyFollowing) {
+          clubFollowers.remove(_userEmail);
+          _followedClubs.removeWhere((club) => club['id'] == clubId);
+        } else {
           clubFollowers.add(_userEmail!);
+          _followedClubs.add(
+            _allClubs.firstWhere((club) => club['id'] == clubId),
+          );
         }
-      }
-
-      // Update user document
-      batch.update(userRef, {
-        'followedClubs': followedClubIds,
-        'followedClubNames': followedClubNames,
       });
 
-      // Update club document with exact followers count
-      batch.update(clubRef, {
+      // Update database
+      await clubRef.update({
         'memberCount': clubFollowers.length,
         'followers': clubFollowers,
       });
 
-      await batch.commit();
-
-      // Apply optimistic UI update
-      setState(() {
-        // Update all clubs list
-        for (var club in _allClubs) {
-          if (club['id'] == clubId) {
-            List<String> followers = List<String>.from(club['followers'] ?? []);
-
-            if (isCurrentlyFollowing) {
-              followers.remove(_userEmail);
-            } else if (!followers.contains(_userEmail)) {
-              followers.add(_userEmail!);
-            }
-
-            club['followers'] = followers;
-            club['memberCount'] = followers.length;
-            break;
-          }
-        }
-
-        // Update category lists
-        for (var category in _clubsByCategory.keys) {
-          for (var club in _clubsByCategory[category]!) {
-            if (club['id'] == clubId) {
-              List<String> followers = List<String>.from(
-                club['followers'] ?? [],
-              );
-
-              if (isCurrentlyFollowing) {
-                followers.remove(_userEmail);
-              } else if (!followers.contains(_userEmail)) {
-                followers.add(_userEmail!);
-              }
-
-              club['followers'] = followers;
-              club['memberCount'] = followers.length;
-              break;
-            }
-          }
-        }
-
-        // Update followed clubs list
-        if (isCurrentlyFollowing) {
-          _followedClubs.removeWhere((club) => club['id'] == clubId);
-        } else {
-          // Add to followed clubs if not already there
-          if (!_followedClubs.any((club) => club['id'] == clubId)) {
-            Map<String, dynamic>? clubToAdd = _allClubs.firstWhere(
-              (club) => club['id'] == clubId,
-              orElse: () => <String, dynamic>{},
-            );
-
-            if (clubToAdd.isNotEmpty) {
-              _followedClubs.add(Map<String, dynamic>.from(clubToAdd));
-            }
-          }
-        }
-
-        // Re-organize followed clubs
-        _organizeFollowedClubsByCategory();
+      // Update user's followed clubs
+      final userRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(user!.uid);
+      await userRef.update({
+        'followedClubs': FieldValue.arrayUnion([clubId]),
+        'followedClubNames.$clubId': clubName,
       });
 
-      // Show success message
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          duration: const Duration(seconds: 2),
           content: Text(
             isCurrentlyFollowing
-                ? 'Successfully unfollowed $clubName'
-                : 'Successfully followed $clubName',
+                ? 'Unfollowed $clubName'
+                : 'Followed $clubName',
           ),
           backgroundColor: isCurrentlyFollowing ? Colors.red : Colors.green,
         ),
       );
 
-      // Refresh data to ensure consistency
-      _fetchClubs();
+      _organizeFollowedClubsByCategory();
     } catch (e) {
       print('Error toggling club follow: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          duration: const Duration(seconds: 2),
           content: Text('Failed to update: ${e.toString()}'),
           backgroundColor: Colors.red,
         ),
       );
-      // Refresh data to revert any incorrect UI updates
-      _fetchClubs();
+      _fetchClubs(); // Refresh data
     }
   }
 
   String _getGreetingMessage() {
     int hour = DateTime.now().hour;
-    if (hour < 12) {
-      return 'Good Morning, $_userName!';
-    } else if (hour < 18) {
-      return 'Good Afternoon, $_userName!';
-    } else {
-      return 'Good Evening, $_userName!';
-    }
+    if (hour < 12) return 'Good Morning, $_userName!';
+    if (hour < 18) return 'Good Afternoon, $_userName!';
+    return 'Good Evening, $_userName!';
   }
 
   bool _isClubFollowed(Map<String, dynamic> club) {
     if (_userEmail == null) return false;
+    return List<String>.from(club['followers'] ?? []).contains(_userEmail);
+  }
 
-    List<String> followers = [];
-    if (club.containsKey('followers')) {
-      followers = List<String>.from(club['followers']);
-    }
+  Widget _buildClubCard(Map<String, dynamic> club, bool isFollowedSection) {
+    final isFollowing = _isClubFollowed(club);
+    final imageUrl = convertGoogleDriveLink(club['imageUrl']) ?? '';
 
-    return followers.contains(_userEmail);
+    return Card(
+      elevation: 2,
+      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+      child: ListTile(
+        contentPadding: const EdgeInsets.all(12),
+        leading: CircleAvatar(
+          radius: 30,
+          backgroundColor: Colors.grey[200],
+          backgroundImage:
+              imageUrl.isNotEmpty
+                  ? CachedNetworkImageProvider(imageUrl)
+                  : const AssetImage('assets/default_club.png')
+                      as ImageProvider,
+          child:
+              imageUrl.isEmpty
+                  ? const Icon(Icons.group, size: 30, color: Colors.grey)
+                  : null,
+        ),
+        title: Text(
+          club['name'],
+          style: GoogleFonts.roboto(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 4),
+            Text(
+              club['description'],
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.roboto(fontSize: 14),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.people, size: 16, color: Colors.grey[600]),
+                const SizedBox(width: 4),
+                Text(
+                  '${club['memberCount']} members',
+                  style: GoogleFonts.roboto(
+                    fontSize: 12,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        trailing: ElevatedButton(
+          onPressed: () => _toggleFollowClub(club['id'], isFollowing),
+          style: ElevatedButton.styleFrom(
+            backgroundColor:
+                isFollowing ? Colors.grey[300] : Colors.orangeAccent,
+            foregroundColor: isFollowing ? Colors.black : Colors.white,
+          ),
+          child: Text(isFollowing ? 'Unfollow' : 'Follow'),
+        ),
+        onTap: () {
+          if (isFollowedSection) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder:
+                    (context) => ClubAnnouncementPage(
+                      clubId: club['id'],
+                      clubName: club['name'],
+                    ),
+              ),
+            );
+          }
+        },
+      ),
+    );
   }
 
   Widget _buildCategorizedClubsList(
@@ -471,7 +378,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.error_outline, size: 60, color: Colors.grey[400]),
+            Icon(
+              isFollowedSection ? Icons.group_add : Icons.error_outline,
+              size: 60,
+              color: Colors.grey[400],
+            ),
             const SizedBox(height: 20),
             Text(
               isFollowedSection
@@ -479,6 +390,25 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   : "No clubs available",
               style: GoogleFonts.roboto(fontSize: 18, color: Colors.grey[600]),
             ),
+            if (isFollowedSection) ...[
+              const SizedBox(height: 10),
+              Text(
+                "Explore clubs and tap 'Follow' to add them here",
+                style: GoogleFonts.roboto(
+                  fontSize: 14,
+                  color: Colors.grey[500],
+                ),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () => _tabController.animateTo(0),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orangeAccent,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('Explore Clubs'),
+              ),
+            ],
           ],
         ),
       );
@@ -488,9 +418,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       itemCount: categorizedClubs.keys.length,
       itemBuilder: (context, index) {
         String category = categorizedClubs.keys.elementAt(index);
-        List<Map<String, dynamic>> clubsInCategory =
-            categorizedClubs[category]!;
-
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -505,154 +432,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 ),
               ),
             ),
-            ListView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: clubsInCategory.length,
-              itemBuilder: (context, clubIndex) {
-                final club = clubsInCategory[clubIndex];
-                final isFollowing = _isClubFollowed(club);
-
-                return Card(
-                  elevation: 2,
-                  margin: const EdgeInsets.symmetric(
-                    vertical: 8,
-                    horizontal: 16,
-                  ),
-                  child: ListTile(
-                    contentPadding: const EdgeInsets.all(12),
-                    leading: CircleAvatar(
-                      backgroundImage: const AssetImage(
-                        'assets/default_club.png',
-                      ),
-                      radius: 30,
-                    ),
-                    title: Text(
-                      club['name'],
-                      style: GoogleFonts.roboto(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const SizedBox(height: 4),
-                        Text(
-                          club['description'],
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: GoogleFonts.roboto(fontSize: 14),
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.people,
-                              size: 16,
-                              color: Colors.grey[600],
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              '${club['memberCount']} members',
-                              style: GoogleFonts.roboto(
-                                fontSize: 12,
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    trailing: ElevatedButton(
-                      onPressed:
-                          () => _toggleFollowClub(club['id'], isFollowing),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor:
-                            isFollowing
-                                ? Colors.grey[300]
-                                : Colors.orangeAccent,
-                        foregroundColor:
-                            isFollowing ? Colors.black : Colors.white,
-                      ),
-                      child: Text(isFollowing ? 'Unfollow' : 'Follow'),
-                    ),
-                    onTap: () {
-                      // If this is a followed club, navigate to the announcement page
-                      if (isFollowedSection) {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder:
-                                (context) => ClubAnnouncementPage(
-                                  clubId: club['id'],
-                                  clubName: club['name'],
-                                ),
-                          ),
-                        );
-                      } else {
-                        // For clubs in the All Clubs tab, just show a snackbar for now
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('View details for ${club['name']}'),
-                          ),
-                        );
-                      }
-                    },
-                  ),
-                );
-              },
+            ...categorizedClubs[category]!.map(
+              (club) => _buildClubCard(club, isFollowedSection),
             ),
           ],
         );
       },
     );
-  }
-
-  Widget _buildClubList(
-    List<Map<String, dynamic>> clubs,
-    bool isFollowedSection,
-  ) {
-    if (isFollowedSection && clubs.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.group_add, size: 60, color: Colors.grey[400]),
-            const SizedBox(height: 20),
-            Text(
-              "You're not following any clubs yet",
-              style: GoogleFonts.roboto(fontSize: 18, color: Colors.grey[600]),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              "Explore clubs and tap 'Follow' to add them here",
-              style: GoogleFonts.roboto(fontSize: 14, color: Colors.grey[500]),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: () {
-                // Switch to All Clubs tab
-                _tabController.animateTo(0);
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.orangeAccent,
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('Explore Clubs'),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (!isFollowedSection) {
-      return _buildCategorizedClubsList(_clubsByCategory, false);
-    } else {
-      // Show followed clubs by category
-      return _buildCategorizedClubsList(_followedClubsByCategory, true);
-    }
   }
 
   Widget _buildHomeContent() {
@@ -684,13 +470,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                           ),
                           const SizedBox(height: 16),
                           ElevatedButton(
-                            onPressed: () {
-                              setState(() {
-                                _isLoading = true;
-                                _hasError = false;
-                              });
-                              _fetchClubs();
-                            },
+                            onPressed: _fetchClubs,
                             child: const Text('Retry'),
                           ),
                         ],
@@ -712,8 +492,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                           child: TabBarView(
                             controller: _tabController,
                             children: [
-                              _buildClubList(_allClubs, false),
-                              _buildClubList(_followedClubs, true),
+                              _buildCategorizedClubsList(
+                                _clubsByCategory,
+                                false,
+                              ),
+                              _buildCategorizedClubsList(
+                                _followedClubsByCategory,
+                                true,
+                              ),
                             ],
                           ),
                         ),
@@ -740,7 +526,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                 ),
                 centerTitle: true,
                 actions: [
-                  // Add notification badge and icon
                   NotificationBadge(
                     child: const Icon(Icons.notifications),
                     onPressed: () {
@@ -787,4 +572,14 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       ),
     );
   }
+}
+
+String? convertGoogleDriveLink(String url) {
+  final RegExp regex = RegExp(
+    r'https:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)',
+  );
+  final match = regex.firstMatch(url);
+  return match != null
+      ? 'https://drive.google.com/uc?export=view&id=${match.group(1)}'
+      : null;
 }

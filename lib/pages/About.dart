@@ -112,6 +112,7 @@ class _AboutState extends State<About> {
                   16,
                 ),
                 children: [
+                  _buildTile('UID', _auth.currentUser?.uid ?? "Unknown"),
                   _buildTile("Name", data['name'] ?? "N/A"),
                   _buildTile("REGISTER NUMBER", data['regNo'] ?? "N/A"),
                   _buildTile("Email", data['email'] ?? "N/A"),
