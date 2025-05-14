@@ -31,6 +31,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Map<String, List<Map<String, dynamic>>> _followedClubsByCategory = {};
   String? _userEmail;
 
+  // Map to track follow/unfollow operations in progress
+  final Map<String, bool> _processingClubs = {};
+
   // Predefined categories
   final List<String> predefinedCategories = [
     'Social Service',
@@ -207,39 +210,81 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   ) async {
     if (user == null || _userEmail == null) return;
 
+    // Prevent multiple clicks while processing
+    if (_processingClubs[clubId] == true) return;
+
+    _processingClubs[clubId] = true;
+
+    // Get club data from local state
+    Map<String, dynamic>? clubData;
+    for (var club in _allClubs) {
+      if (club['id'] == clubId) {
+        clubData = Map<String, dynamic>.from(club);
+        break;
+      }
+    }
+
+    if (clubData == null) {
+      _processingClubs[clubId] = false;
+      return;
+    }
+
+    String clubName = clubData['name'];
+    List<String> clubFollowers = List<String>.from(clubData['followers'] ?? []);
+
+    // Update UI immediately (optimistic update)
+    setState(() {
+      // Update the club in _allClubs
+      for (var i = 0; i < _allClubs.length; i++) {
+        if (_allClubs[i]['id'] == clubId) {
+          if (isCurrentlyFollowing) {
+            // Remove user from followers
+            clubFollowers.remove(_userEmail);
+            _allClubs[i]['followers'] = clubFollowers;
+            _allClubs[i]['memberCount'] = clubFollowers.length;
+          } else {
+            // Add user to followers
+            if (!clubFollowers.contains(_userEmail)) {
+              clubFollowers.add(_userEmail!);
+              _allClubs[i]['followers'] = clubFollowers;
+              _allClubs[i]['memberCount'] = clubFollowers.length;
+            }
+          }
+          break;
+        }
+      }
+
+      // Update _followedClubs list
+      if (isCurrentlyFollowing) {
+        _followedClubs.removeWhere((club) => club['id'] == clubId);
+      } else {
+        final clubToAdd = _allClubs.firstWhere((club) => club['id'] == clubId);
+        if (!_followedClubs.any((club) => club['id'] == clubId)) {
+          _followedClubs.add(Map<String, dynamic>.from(clubToAdd));
+        }
+      }
+
+      // Reorganize followed clubs by category
+      _organizeFollowedClubsByCategory();
+    });
+
+    // Show immediate feedback
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          isCurrentlyFollowing ? 'Unfollowed $clubName' : 'Followed $clubName',
+        ),
+        backgroundColor: isCurrentlyFollowing ? Colors.red : Colors.green,
+        duration: const Duration(seconds: 1),
+      ),
+    );
+
     try {
+      // Update database in background
       final clubRef = FirebaseFirestore.instance
           .collection('clubs')
           .doc(clubId);
-      DocumentSnapshot clubDoc = await clubRef.get();
 
-      if (!clubDoc.exists) return;
-
-      Map<String, dynamic> clubData = clubDoc.data() as Map<String, dynamic>;
-      String clubName = clubData['name'] ?? 'Unknown Club';
-      List<String> clubFollowers = List<String>.from(
-        clubData['followers'] ?? [],
-      );
-
-      bool isActuallyFollowing = clubFollowers.contains(_userEmail);
-      if (isCurrentlyFollowing != isActuallyFollowing) {
-        isCurrentlyFollowing = isActuallyFollowing;
-      }
-
-      // Update UI immediately
-      setState(() {
-        if (isCurrentlyFollowing) {
-          clubFollowers.remove(_userEmail);
-          _followedClubs.removeWhere((club) => club['id'] == clubId);
-        } else {
-          clubFollowers.add(_userEmail!);
-          _followedClubs.add(
-            _allClubs.firstWhere((club) => club['id'] == clubId),
-          );
-        }
-      });
-
-      // Update database
       await clubRef.update({
         'memberCount': clubFollowers.length,
         'followers': clubFollowers,
@@ -249,32 +294,32 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       final userRef = FirebaseFirestore.instance
           .collection('users')
           .doc(user!.uid);
-      await userRef.update({
-        'followedClubs': FieldValue.arrayUnion([clubId]),
-        'followedClubNames.$clubId': clubName,
-      });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            isCurrentlyFollowing
-                ? 'Unfollowed $clubName'
-                : 'Followed $clubName',
-          ),
-          backgroundColor: isCurrentlyFollowing ? Colors.red : Colors.green,
-        ),
-      );
-
-      _organizeFollowedClubsByCategory();
+      if (isCurrentlyFollowing) {
+        await userRef.update({
+          'followedClubs': FieldValue.arrayRemove([clubId]),
+        });
+      } else {
+        await userRef.update({
+          'followedClubs': FieldValue.arrayUnion([clubId]),
+          'followedClubNames.$clubId': clubName,
+        });
+      }
     } catch (e) {
       print('Error toggling club follow: $e');
+
+      // Revert optimistic update on error
+      _fetchClubs(); // Refresh data from server
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Failed to update: ${e.toString()}'),
           backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
         ),
       );
-      _fetchClubs(); // Refresh data
+    } finally {
+      _processingClubs[clubId] = false;
     }
   }
 
@@ -292,7 +337,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Widget _buildClubCard(Map<String, dynamic> club, bool isFollowedSection) {
     final isFollowing = _isClubFollowed(club);
-    final imageUrl = convertGoogleDriveLink(club['imageUrl']) ?? '';
+    final imageUrl = convertGoogleDriveLink(club['imageUrl'] ?? '') ?? '';
+    final bool isProcessing = _processingClubs[club['id']] == true;
 
     return Card(
       elevation: 2,
@@ -343,13 +389,28 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           ],
         ),
         trailing: ElevatedButton(
-          onPressed: () => _toggleFollowClub(club['id'], isFollowing),
+          onPressed:
+              isProcessing
+                  ? null // Disable button while processing
+                  : () => _toggleFollowClub(club['id'], isFollowing),
           style: ElevatedButton.styleFrom(
             backgroundColor:
                 isFollowing ? Colors.grey[300] : Colors.orangeAccent,
             foregroundColor: isFollowing ? Colors.black : Colors.white,
           ),
-          child: Text(isFollowing ? 'Unfollow' : 'Follow'),
+          child:
+              isProcessing
+                  ? SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        isFollowing ? Colors.black : Colors.white,
+                      ),
+                    ),
+                  )
+                  : Text(isFollowing ? 'Unfollow' : 'Follow'),
         ),
         onTap: () {
           if (isFollowedSection) {
@@ -575,6 +636,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 }
 
 String? convertGoogleDriveLink(String url) {
+  if (url.isEmpty) return null;
   final RegExp regex = RegExp(
     r'https:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)',
   );

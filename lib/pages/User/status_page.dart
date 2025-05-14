@@ -453,6 +453,11 @@ class _StatusPageState extends State<StatusPage>
                       style: pw.TextStyle(
                         fontSize: 22,
                         fontWeight: pw.FontWeight.bold,
+                        color: PdfColor(
+                          1,
+                          0.5,
+                          0,
+                        ), // RGB values between 0 and 1
                       ),
                     ),
 

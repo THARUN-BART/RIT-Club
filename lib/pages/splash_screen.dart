@@ -4,10 +4,39 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:rit_club/pages/Admin/admin_home.dart';
 import 'package:rit_club/pages/User/Home.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:rit_club/pages/mainScreen.dart'; // For AdminMainScreen
+import 'package:rit_club/pages/mainScreen.dart';
+import 'package:rit_club/utils/push_notifications.dart';
+
+import '../notification_service.dart';
+
+// Need to add the missing CRUDService to your project
+class CRUDService {
+  // Method to save user token to Firestore
+  static Future<void> saveUserToken(String token) async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .update({
+              'fcmToken': token,
+              'lastTokenUpdate': FieldValue.serverTimestamp(),
+            });
+      }
+    } catch (e) {
+      print('Error saving user token: $e');
+    }
+  }
+}
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
+
+  // Static method for saving user token - used by PushNotifications class
+  static Future<void> saveUserToken(String token) async {
+    await CRUDService.saveUserToken(token);
+  }
 
   @override
   State<SplashScreen> createState() => _SplashScreenState();
@@ -17,7 +46,24 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    _checkAuthState(); // Check Firebase Authentication state
+    _initializeAppAndCheckAuth();
+  }
+
+  Future<void> _initializeAppAndCheckAuth() async {
+    try {
+      // Initialize push notifications
+      await PushNotifications.setupNotifications();
+
+      // Standard splash screen delay
+      await Future.delayed(Duration(milliseconds: 1000));
+
+      // Check if user is already logged in
+      _checkAuthState();
+    } catch (e) {
+      print('Error during app initialization: $e');
+      // Fallback to basic auth check if notification setup fails
+      _checkAuthState();
+    }
   }
 
   @override
@@ -49,8 +95,6 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _checkAuthState() async {
-    await Future.delayed(Duration(milliseconds: 1000)); // Splash delay
-
     User? user = FirebaseAuth.instance.currentUser;
 
     if (user != null) {
@@ -69,9 +113,7 @@ class _SplashScreenState extends State<SplashScreen> {
             // Navigate to Admin page
             Navigator.pushReplacement(
               context,
-              MaterialPageRoute(
-                builder: (context) => AdminHome(),
-              ), // Replace with your admin screen
+              MaterialPageRoute(builder: (context) => AdminHome()),
             );
           } else {
             // Navigate to regular Home page
@@ -81,7 +123,7 @@ class _SplashScreenState extends State<SplashScreen> {
             );
           }
         } else {
-          // If no role is found, redirect to login or handle accordingly
+          // If no role is found, redirect to login
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(builder: (context) => ClubCircleButton()),
