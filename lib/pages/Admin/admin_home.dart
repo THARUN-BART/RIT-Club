@@ -1038,6 +1038,144 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     );
     final memberCount = clubData['memberCount'] ?? 0;
 
+    Future<bool> checkUserExists(String uid) async {
+      DocumentSnapshot userDoc =
+          await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      return userDoc.exists;
+    }
+
+    Future<bool> checkUserRole(String uid) async {
+      DocumentSnapshot userDoc =
+          await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      if (userDoc.exists && userDoc.get('role') == 'admin') {
+        return true; // User is already an admin
+      }
+      return false; // User is not an admin
+    }
+
+    Future<void> makeUserAdmin(String uid) async {
+      DocumentReference userRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid);
+
+      try {
+        await userRef.update({'role': 'admin'}); // Update role to admin
+        print('User has been made an admin.');
+      } catch (e) {
+        print('Error updating user: $e');
+      }
+    }
+
+    void showInputDialog(BuildContext context) {
+      TextEditingController _controller = TextEditingController();
+
+      showDialog(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: Text('Enter a UID of User'),
+            content: TextField(
+              controller: _controller,
+              decoration: InputDecoration(hintText: 'Type something...'),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                },
+                child: Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () async {
+                  String uid = _controller.text.trim();
+
+                  // Check if the user exists and their role
+                  bool exists = await checkUserExists(uid);
+                  bool isAdmin = await checkUserRole(uid);
+
+                  if (!exists) {
+                    // User does not exist, show error dialog
+                    showDialog(
+                      context: context,
+                      builder: (BuildContext context) {
+                        return AlertDialog(
+                          title: Text('Error'),
+                          content: Text('User UID not found!'),
+                          actions: [
+                            TextButton(
+                              onPressed: () {
+                                Navigator.of(context).pop();
+                              },
+                              child: Text('OK'),
+                            ),
+                          ],
+                        );
+                      },
+                    );
+                  } else if (isAdmin) {
+                    // User is already an admin, show failure dialog
+                    showDialog(
+                      context: context,
+                      builder: (BuildContext context) {
+                        return AlertDialog(
+                          title: Text('Operation Failed'),
+                          content: Text('User is already an admin.'),
+                          actions: [
+                            TextButton(
+                              onPressed: () {
+                                Navigator.of(context).pop();
+                              },
+                              child: Text('OK'),
+                            ),
+                          ],
+                        );
+                      },
+                    );
+                  } else {
+                    // Show confirmation dialog before making user admin
+                    showDialog(
+                      context: context,
+                      builder: (BuildContext context) {
+                        return AlertDialog(
+                          title: Text('Confirm Action'),
+                          content: Text(
+                            'Are you sure you want to make this user an admin?',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () {
+                                Navigator.of(
+                                  context,
+                                ).pop(); // Close confirmation dialog
+                              },
+                              child: Text('No'),
+                            ),
+                            TextButton(
+                              onPressed: () async {
+                                await makeUserAdmin(uid);
+                                Navigator.of(
+                                  context,
+                                ).pop(); // Close confirmation dialog
+                                Navigator.of(
+                                  context,
+                                ).pop(); // Close input dialog
+                              },
+                              child: Text('Yes'),
+                            ),
+                          ],
+                        );
+                      },
+                    );
+                  }
+                },
+                child: Text('OK'),
+              ),
+            ],
+          );
+        },
+      );
+    }
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -1107,6 +1245,25 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                       ),
                       const SizedBox(height: 8),
                       Text(clubDescription),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton.icon(
+                            onPressed: () {
+                              showInputDialog(context);
+                            },
+                            style: TextButton.styleFrom(
+                              backgroundColor: Colors.orangeAccent,
+                              foregroundColor: Colors.white,
+                            ),
+                            icon: Icon(
+                              Icons.admin_panel_settings,
+                            ), // Prefix icon
+                            label: Text('Make As Admin'),
+                          ),
+                          // Additional widgets go here
+                        ],
+                      ),
                     ],
                   ),
                 ),

@@ -142,37 +142,3 @@ class _GDriveImagePickerDialogState extends State<GDriveImagePickerDialog> {
     );
   }
 }
-
-void main() {
-  runApp(const MaterialApp(home: ImageUploadScreen()));
-}
-
-class ImageUploadScreen extends StatelessWidget {
-  const ImageUploadScreen({Key? key}) : super(key: key);
-
-  void _openImageDialog(BuildContext context) async {
-    String? imageUrl = await showDialog<String>(
-      context: context,
-      builder: (context) => const GDriveImagePickerDialog(),
-    );
-
-    if (imageUrl != null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Image URL: $imageUrl')));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Google Drive Image Picker')),
-      body: Center(
-        child: ElevatedButton(
-          onPressed: () => _openImageDialog(context),
-          child: const Text('Select Image'),
-        ),
-      ),
-    );
-  }
-}
