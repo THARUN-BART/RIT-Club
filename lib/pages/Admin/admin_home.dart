@@ -1047,7 +1047,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     Future<bool> checkUserRole(String uid) async {
       DocumentSnapshot userDoc =
           await FirebaseFirestore.instance.collection('users').doc(uid).get();
-      if (userDoc.exists && userDoc.get('role') == 'admin') {
+      if (userDoc.exists && userDoc.get('role') == 'ADMIN') {
         return true; // User is already an admin
       }
       return false; // User is not an admin
@@ -1058,11 +1058,36 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
           .collection('users')
           .doc(uid);
 
+      QuerySnapshot clubsSnapshot =
+          await FirebaseFirestore.instance
+              .collection('clubs')
+              .where('adminIds', isEqualTo: uid)
+              .get();
+
       try {
-        await userRef.update({'role': 'admin'}); // Update role to admin
+        await userRef.update({'role': 'ADMIN'});
         print('User has been made an admin.');
+
+        // Update each club where this user was admin
+        for (var club in clubsSnapshot.docs) {
+          await club.reference.update({
+            'adminIds': uid,
+            'previousAdminId': club.get(
+              'adminIds',
+            ), // Optional: Keep record of previous admin
+          });
+
+          // Optionally, update the previous admin's role back to 'USER'
+          DocumentReference previousAdminRef = FirebaseFirestore.instance
+              .collection('users')
+              .doc(club.get('adminId'));
+
+          await previousAdminRef.update({'role': 'USER'});
+        }
+
+        print('Updated clubs and previous admin role.');
       } catch (e) {
-        print('Error updating user: $e');
+        print('Error updating user or clubs: $e');
       }
     }
 
@@ -1076,7 +1101,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
             title: Text('Enter a UID of User'),
             content: TextField(
               controller: _controller,
-              decoration: InputDecoration(hintText: 'Type something...'),
+              decoration: InputDecoration(hintText: 'Enter uid here...'),
             ),
             actions: [
               TextButton(

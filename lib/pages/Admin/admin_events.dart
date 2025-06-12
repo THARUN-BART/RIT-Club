@@ -1575,7 +1575,7 @@ class EventCard extends StatelessWidget {
                       });
 
                   Navigator.of(context).pop();
-                  Navigator.of(context).pop(); // Close the event details too
+                  Navigator.of(context).pop();
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text("Event cancelled successfully"),
